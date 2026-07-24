@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { PieChart, Pie, Cell, Legend, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
-import { Search, Filter, Rocket } from "lucide-react";
+import { Search, Filter, Rocket, Building2, Users, TrendingUp, Award, Briefcase, GraduationCap, Calendar, ChevronRight } from "lucide-react";
 import axios from 'axios';
 import { useAlert } from '../components/Alert';
 import { LuGraduationCap } from 'react-icons/lu';
 import LoadingAnimation from '../components/LoadingAnimation';
 
 const Placements = () => {
-  // ALL HOOKS MUST BE DECLARED FIRST - BEFORE ANY CONDITIONAL RETURNS
   const { showAlert, AlertComponent } = useAlert();
 
   const [yearlyPlacements, setYearlyPlacements] = useState([]);
@@ -19,7 +18,6 @@ const Placements = () => {
   const [search, setSearch] = useState("");
   const [selectedYear, setSelectedYear] = useState("All");
 
-  // useEffect must also be declared before conditional returns
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
@@ -56,37 +54,26 @@ const Placements = () => {
     };
 
     fetchData();
-  }, []); // Empty dependency array means this runs once on mount
-
-  // if (loading) {
-  //   return (
-  //     <div className="flex items-center justify-center min-h-[400px]">
-  //       <div className="text-center">
-  //         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mx-auto"></div>
-  //         <p className="mt-4 text-gray-500">Loading placements page please wait...</p>
-  //       </div>
-  //     </div>
-  //   );
-  // }
+  }, []);
 
   if (loading) {
-      return (
-        <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center">
-          <div className="text-center">
-            <div className="relative">
-              <div className="animate-spin rounded-full h-20 w-20 border-t-4 border-b-4 border-blue-600 mx-auto"></div>
-              <div className="absolute inset-0 flex items-center justify-center">
-                <Rocket className="w-8 h-8 text-blue-600 animate-pulse" />
-              </div>
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="relative">
+            <div className="animate-spin rounded-full h-20 w-20 border-t-4 border-b-4 border-blue-600 mx-auto"></div>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <Rocket className="w-8 h-8 text-blue-600 animate-pulse" />
             </div>
-            <p className="mt-6 text-lg font-semibold text-gray-700">Loading Placements Page ...</p>
-            <p className="text-sm text-gray-400 mt-1">Please wait a moment . . .</p>
           </div>
+          <p className="mt-6 text-lg font-semibold text-gray-700">Loading Placements Page ...</p>
+          <p className="text-sm text-gray-400 mt-1">Please wait a moment . . .</p>
         </div>
-      );
-    }
-  // Rest of your component logic (this runs only when loading is false)
-  const COLORS = ["hsl(215, 65%, 18%)", "hsl(45, 70%, 52%)"];
+      </div>
+    );
+  }
+
+  const COLORS = ["#1a365d", "#d69e2e"];
 
   const pieData = campusStats?.onCampus
     ? [
@@ -107,182 +94,224 @@ const Placements = () => {
     .sort((a, b) => b.package - a.package)
     .slice(0, 5);
 
+  // Calculate summary stats
+  const totalStudents = placedStudents.length;
+  const totalCompanies = companies.length;
+  const avgPackage = totalStudents > 0 
+    ? (placedStudents.reduce((sum, s) => sum + parseFloat(s.package), 0) / totalStudents).toFixed(1)
+    : 0;
+  const highestPackage = totalStudents > 0 
+    ? Math.max(...placedStudents.map(s => parseFloat(s.package)))
+    : 0;
+
+  
   return (
-    <section className='min-h-screen w-full py-10 px-5'>
+    <section className='min-h-screen bg-gray-50 py-8 px-4 md:px-6'>
       {AlertComponent}
-      {/* Rest of your JSX */}
-      <div className='container mx-auto section-padding bg-[#024a70] px-10 py-16 rounded-xl mb-10'>
-        <h1 className='text-3xl text-white sm:text-2xl font-bold'>Placements Record</h1>
-        <p className='text-md text-white'>Year-wise and company-wise placement statistics from 2019 to 2025.</p>
-      </div>
-
-      <div className='grid sm:grid-cols-1 md:grid-cols-2 gap-6 p-6'>
-        {/* Pie Chart Card */}
-        <div className='bg-gray-100 rounded-xl shadow-md shadow-gray-300 p-6 flex flex-col justify-between'>
-          <h2 className="text-2xl font-bold mb-4 text-gray-800">
-            Placement Distribution
-          </h2>
-
-          {pieData.length === 0 ? (
-            <div className="flex items-center justify-center h-[280px]">
-              <p className="text-gray-500">No placement data available</p>
+      
+      <div className='max-w-7xl mx-auto'>
+        {/* Header */}
+        <div className='bg-white rounded-2xl shadow-sm border border-gray-100 px-6 md:px-10 py-10 md:py-12 mb-8'>
+          <div className='flex flex-col md:flex-row md:items-center md:justify-between gap-4'>
+            <div>
+              <h1 className='text-3xl md:text-4xl font-bold text-gray-900 tracking-tight'>
+                Placement Records
+              </h1>
+              <p className='text-gray-500 mt-2'>
+                Year-wise and company-wise placement statistics from 2019 to 2025
+              </p>
             </div>
-          ) : (
-            <div className='w-full flex-1 flex items-center justify-center'>
-              <ResponsiveContainer width="100%" height={280}>
-                <PieChart>
-                  <Pie
-                    data={pieData}
-                    nameKey="name"
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={100}
-                    paddingAngle={4}
-                    dataKey="value"
-                    label={({ name, percent }) =>
-                      `${name} ${(percent * 100).toFixed(0)}%`
-                    }
-                  >
-                    {pieData.map((_, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip contentStyle={{ borderRadius: 8, fontSize: 13 }} />
-                  <Legend verticalAlign="bottom" height={36} />
-                </PieChart>
-              </ResponsiveContainer>
+            <div className='flex items-center gap-2 text-sm text-gray-400'>
+              <span className='w-2 h-2 rounded-full bg-emerald-400 animate-pulse'></span>
+              Live Data
             </div>
-          )}
-        </div>
-
-        {/* Bar Chart Card */}
-        <div className='bg-gray-100 rounded-xl shadow-md shadow-gray-300 p-6 flex flex-col justify-between'>
-          <h2 className="text-2xl font-bold mb-2 text-gray-800">
-            Students Placed Per Year
-          </h2>
-
-          <p className="text-sm text-gray-600 mb-4">
-            Placement data for each academic year.
-          </p>
-
-          {yearlyPlacements.length === 0 ? (
-            <div className="flex items-center justify-center h-[280px]">
-              <p className="text-gray-500">No yearly data available</p>
-            </div>
-          ) : (
-            <div className='w-full flex-1'>
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={yearlyPlacements}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="year" tick={{ fontSize: 13 }} />
-                  <YAxis tick={{ fontSize: 13 }} />
-
-                  <Tooltip
-                    contentStyle={{
-                      borderRadius: 8,
-                      border: "1px solid #ccc",
-                      backgroundColor: "#fff",
-                      padding: "10px"
-                    }}
-                    formatter={(value, name) => [
-                      `${value} students`,
-                      name === "totalPlaced" ? "Placed" : "Total"
-                    ]}
-                  />
-
-                  <Bar
-                    dataKey="totalPlaced"
-                    fill="hsl(215, 65%, 18%)"
-                    radius={[4, 4, 0, 0]}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* company cards List */}
-      <div className='pt-14 container mx-auto section-padding'>
-        <h2 className="text-2xl font-display font-bold text-foreground mb-6 py-4 px-2">Top Recruiting Companies</h2>
-        {companies.length === 0 ? (
-          <div className="text-center py-8 bg-gray-100 rounded-xl">
-            <p className="text-gray-500">No company data available</p>
           </div>
-        ) : (
-          <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-4">
-            {companies.map((company, index) => (
-              <div key={index} className="bg-gray-100 hover:bg-blue-100 mb-10 flex flex-col items-center justify-center flex-wrap rounded-xl p-6 shadow-md border-l-4 border-l-blue-400 border-b-4 border-b-blue-900 shadow-gray-300 hover:scale-105 transition-all duration-500">
-                <p className="text-2xl mb-2">{company.logo}</p>
-                <h3 className="text-lg font-semibold text-foreground mb-2">{company.name}</h3>
-                <p className="text-sm text-muted-foreground mb-1">Students Placed: {company.studentsPlaced}</p>
-                <p className="text-sm text-muted-foreground">Average Salary: {company.avgPackage}</p>
+        </div>
+
+        
+
+        {/* Charts */}
+        <div className='grid lg:grid-cols-2 gap-6 mb-8'>
+          {/* Pie Chart */}
+          <div className='bg-white rounded-xl shadow-sm border border-gray-100 p-6'>
+            <div className='flex items-center justify-between mb-6'>
+              <h2 className='text-lg font-semibold text-gray-900'>
+                Placement Distribution
+              </h2>
+              <span className='text-xs text-gray-400'>On/Off Campus</span>
+            </div>
+
+            {pieData.length === 0 ? (
+              <div className="flex items-center justify-center h-[280px]">
+                <p className="text-gray-400 text-sm">No placement data available</p>
               </div>
-            ))}
+            ) : (
+              <div className='w-full'>
+                <ResponsiveContainer width="100%" height={280}>
+                  <PieChart>
+                    <Pie
+                      data={pieData}
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={95}
+                      paddingAngle={3}
+                      dataKey="value"
+                      label={({ name, percent }) =>
+                        `${name} ${(percent * 100).toFixed(0)}%`
+                      }
+                      labelLine={false}
+                    >
+                      {pieData.map((_, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip 
+                      contentStyle={{ 
+                        borderRadius: 8, 
+                        fontSize: 12, 
+                        border: 'none',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+                      }} 
+                    />
+                    <Legend verticalAlign="bottom" height={36} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </div>
-        )}
-      </div>
 
-      {/* Marquee Section */}
-      <div className="py-4 md:py-6 container mx-auto section-padding mb-8 md:mb-10 overflow-hidden">
-        <div className="relative w-full">
-          <div className="absolute left-0 top-0 bottom-0 w-8 md:w-12 bg-gradient-to-r from-background to-transparent z-10 pointer-events-none"></div>
-          <div className="absolute right-0 top-0 bottom-0 w-8 md:w-12 bg-gradient-to-l from-background to-transparent z-10 pointer-events-none"></div>
+          {/* Bar Chart */}
+          <div className='bg-white rounded-xl shadow-sm border border-gray-100 p-6'>
+            <div className='flex items-center justify-between mb-6'>
+              <h2 className='text-lg font-semibold text-gray-900'>
+                Yearly Placements
+              </h2>
+              <span className='text-xs text-gray-400'>Students placed</span>
+            </div>
 
-          {companies.length > 0 ? (
-            <marquee
-              className="text-xs sm:text-sm text-muted-foreground"
-              behavior="scroll"
-              direction="left"
-              scrollamount="10"
-              onMouseEnter={(e) => e.target.stop()}
-              onMouseLeave={(e) => e.target.start()}
-              loop={true}
-            >
-              <div className='flex items-center gap-4 sm:gap-6 md:gap-18 py-2'>
-                {companies.map((company, index) => (
-                  <div
-                    key={index}
-                    className="flex flex-col items-center gap-1 sm:gap-2 flex-shrink-0"
-                  >
-                    <span className="sm:text-xs md:text-lg font-bold whitespace-nowrap">
+            {yearlyPlacements.length === 0 ? (
+              <div className="flex items-center justify-center h-[280px]">
+                <p className="text-gray-400 text-sm">No yearly data available</p>
+              </div>
+            ) : (
+              <div className='w-full'>
+                <ResponsiveContainer width="100%" height={280}>
+                  <BarChart data={yearlyPlacements}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+                    <XAxis 
+                      dataKey="year" 
+                      tick={{ fontSize: 12, fill: '#6b7280' }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis 
+                      tick={{ fontSize: 12, fill: '#6b7280' }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        borderRadius: 8,
+                        border: 'none',
+                        backgroundColor: '#fff',
+                        padding: '10px 14px',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+                      }}
+                      formatter={(value) => [`${value} students`, 'Placed']}
+                    />
+                    <Bar
+                      dataKey="totalPlaced"
+                      fill="#1a365d"
+                      radius={[4, 4, 0, 0]}
+                      barSize={40}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Companies Section */}
+        <div className='bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-8'>
+          <div className='flex items-center justify-between mb-6'>
+            <div>
+              <h2 className='text-lg font-semibold text-gray-900'>
+                Recruiting Companies
+              </h2>
+              <p className='text-sm text-gray-400 mt-1'>
+                Top companies hiring from our campus
+              </p>
+            </div>
+            <div className='text-sm text-gray-400'>
+              {companies.length} companies
+            </div>
+          </div>
+
+          {companies.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-gray-400 text-sm">No company data available</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {companies.map((company, index) => (
+                <div 
+                  key={index} 
+                  className="group bg-gray-50 rounded-lg p-4 hover:bg-gray-100 transition-colors duration-200 border border-transparent hover:border-gray-200"
+                >
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="text-2xl">{company.logo || '🏢'}</span>
+                    <h3 className="font-medium text-gray-900 text-sm group-hover:text-blue-600 transition-colors">
                       {company.name}
-                    </span>
+                    </h3>
                   </div>
-                ))}
-              </div>
-            </marquee>
-          ) : (
-            <p className="text-center text-gray-500 py-2">No companies to display</p>
+                  <div className="space-y-1">
+                    <p className="text-xs text-gray-500">
+                      <span className="font-medium text-gray-700">{company.studentsPlaced}</span> placed
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      Avg: <span className="font-medium text-gray-700">{company.avgPackage}</span>
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
-      </div>
 
-      {/* searching placed students */}
-      <section className='py-14 container mx-auto section-padding'>
-        <h2 className="text-2xl font-display font-bold text-foreground mb-6">Search top 5 Placed Students</h2>
-        <p className="text-md text-gray-700 mb-4">Find details of students placed in various companies.</p>
-        <div className="bg-card rounded-xl p-6 shadow-lg shadow-gray-300">
+        {/* Students Table */}
+        <div className='bg-white rounded-xl shadow-sm border border-gray-100 p-6'>
+          <div className='flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6'>
+            <div>
+              <h2 className='text-lg font-semibold text-gray-900'>
+                Top 5 Placed Students
+              </h2>
+              <p className='text-sm text-gray-400 mt-1'>
+                Find details of students placed in various companies
+              </p>
+            </div>
+          </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-            <div className="relative flex-1 items-center">
-              <Search size={30} className="absolute left-3 top-1 text-muted-foreground" />
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 mb-6">
+            <div className="relative flex-1">
+              <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search by name, company or department. . . ."
-                className="w-full text-left mb-4 px-14 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400"
+                placeholder="Search by name, company or department..."
+                className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm bg-gray-50 transition-all"
               />
             </div>
 
-            <div className="flex items-center gap-2 ml-auto">
-              <Filter size={30} className="text-muted-foreground" />
+            <div className="flex items-center gap-2">
+              <Filter size={16} className="text-gray-400" />
               <select
                 value={selectedYear}
                 onChange={(e) => setSelectedYear(e.target.value)}
-                className="cursor-pointer ml-2 px-3 py-3 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400"
+                className="px-4 py-2.5 pr-8 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm bg-gray-50 cursor-pointer appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%236B7280%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E')] bg-[length:10px] bg-no-repeat bg-[right_1rem_center]"
               >
                 <option value="All">All Years</option>
                 {[2019, 2020, 2021, 2022, 2023, 2024, 2025].map(year => (
@@ -292,47 +321,55 @@ const Placements = () => {
             </div>
           </div>
 
-          <div className="rounded-xl border border-border/50 overflow-hidden shadow-sm">
-            <div className='overflow-x-auto'>
-              <table className="w-full table-auto">
-                <thead>
-                  <tr className='bg-gray-200'>
-                    <th className="px-4 py-4 text-left text-sm font-medium text-muted-foreground border-b border-gray-400">Name</th>
-                    <th className="px-4 py-4 text-left text-sm font-medium text-muted-foreground border-b border-gray-400">Company</th>
-                    <th className="px-4 py-4 text-left text-sm font-medium text-muted-foreground border-b border-gray-400">Department</th>
-                    <th className="px-4 py-4 text-left text-sm font-medium text-muted-foreground border-b border-gray-400">Year</th>
-                    <th className="px-4 py-4 text-left text-sm font-medium text-muted-foreground border-b border-gray-400">Package (LPA)</th>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className='border-b border-gray-200'>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Student</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden md:table-cell">Department</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell">Year</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Package</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {topPlacers.length === 0 ? (
+                  <tr>
+                    <td colSpan="5" className="text-center py-8 text-gray-400 text-sm">
+                      No students found matching your search criteria
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {topPlacers.length === 0 ? (
-                    <tr>
-                      <td colSpan="5" className="text-center py-8 text-gray-500">
-                        No students found matching your search criteria
+                ) : (
+                  topPlacers.map((student, index) => (
+                    <tr key={index} className="hover:bg-gray-50 transition-colors duration-150">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <span className='w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-xs font-medium text-gray-600'>
+                            {student.name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}
+                          </span>
+                          <span className="text-sm font-medium text-gray-900">{student.name}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-sm text-blue-600">{student.company}</span>
+                      </td>
+                      <td className="px-4 py-3 hidden md:table-cell">
+                        <span className="text-sm text-gray-600">{student.department}</span>
+                      </td>
+                      <td className="px-4 py-3 hidden sm:table-cell">
+                        <span className="text-sm text-gray-500">{student.year}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-sm font-semibold text-gray-900">₹{student.package} LPA</span>
                       </td>
                     </tr>
-                  ) : (
-                    topPlacers.map((student, index) => (
-                      <tr key={index} className="group hover:bg-gray-100 transition-colors duration-300">
-                        <td className="px-4 py-4 border-t border-gray-200 flex gap-2 items-center">
-                          <span className='w-10 h-10 rounded-full bg-gray-300 p-2 flex items-center justify-center group-hover:bg-blue-400 group-hover:text-white transition-all duration-300'>
-                            {student.name.split(" ").map(n => n[0]).join("").slice(0, 2)}
-                          </span>
-                          {student.name}
-                        </td>
-                        <td className="px-4 py-4 border-t border-gray-200 text-blue-500">{student.company}</td>
-                        <td className="px-4 py-4 border-t border-gray-200">{student.department}</td>
-                        <td className="px-4 py-4 border-t border-gray-200">{student.year}</td>
-                        <td className="px-4 py-4 border-t border-gray-200 font-semibold">₹ {student.package}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
-      </section>
+      </div>
     </section>
   )
 }
