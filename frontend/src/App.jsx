@@ -12,6 +12,7 @@ import Signup from "./pages/SignUp";
 import { useState } from "react";
 import Dashboard from "./StudentDashboard/Dashboard";
 import AdminDashboard from "./AdminDashboard/AdminDashboard";
+import ForgotPassword from "./pages/ForgotPasssword";
 
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -40,6 +41,7 @@ function App() {
           path="/login"
           element={<Login user={user} setUser={setUser} />}
         />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route
           path="/signup"
           element={

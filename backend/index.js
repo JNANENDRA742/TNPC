@@ -8,6 +8,8 @@ const multer = require("multer");
 const path = require("path");
 const bcrypt = require("bcrypt");
 const XLSX = require("xlsx");
+const jwt = require('jsonwebtoken');
+
 const {
   authorizeRoles,
   authenticateToken,
@@ -24,6 +26,7 @@ const DepartmentSchema = require("./models/departmentSchema");
 const PlacedStudents = require("./models/PlacedStudents");
 const YearlyPlacements = require("./models/yearlyPlacements");
 const ActualStudentsData = require("./models/ActualStudentsData");
+const otpSchema = require("./models/otpSchema");
 
 // =========== socket setup =======================
 const server = http.createServer(app);
@@ -66,6 +69,225 @@ app.get("/", (req, res) => {
   res.send("Backend Connected Successfully");
 });
 
+// ============== FORGOT PASSWORD - REQUEST OTP ===============================
+app.post("/forgot-password", async (req, res) => {
+    const { email } = req.body;
+
+    // Validate email
+    if (!email) {
+        return res.status(400).json({
+            success: false,
+            message: "Email is required"
+        });
+    }
+
+    try {
+        // Check if user exists
+        const existingUser = await Users.findOne({ 
+            email: { $regex: new RegExp(`^${email.trim()}$`, "i") } 
+        });
+        
+        if (!existingUser) {
+            return res.status(404).json({
+                success: false,
+                message: "No account found with this email address"
+            });
+        }
+
+        // Generate OTP (6 digits)
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const expiry = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+
+        // Delete any existing OTP for this email
+        await otpSchema.deleteMany({ email: email.trim() });
+
+        // Save new OTP
+        await otpSchema.create({
+            email: email.trim(),
+            otp: otp,
+            expiry: expiry
+        });
+
+        // Send OTP via email
+        await transporter.sendMail({
+            from: process.env.EMAIL,
+            to: email.trim(),
+            subject: "Password Reset OTP - TNPC Portal",
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #f9f9f9; border-radius: 10px;">
+                    <div style="background: linear-gradient(135deg, #1a56db, #7c3aed); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;">
+                        <h1 style="color: white; margin: 0; font-size: 24px;">🔐 Password Reset</h1>
+                    </div>
+                    <div style="background: white; padding: 30px; border-radius: 0 0 10px 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                        <p style="color: #4a5568; font-size: 16px;">Hello ${existingUser.name || 'User'},</p>
+                        <p style="color: #4a5568; font-size: 16px;">You requested to reset your password. Use the OTP below to proceed:</p>
+                        
+                        <div style="background: #f7fafc; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
+                            <h2 style="color: #1a56db; font-size: 36px; letter-spacing: 8px; margin: 0;">${otp}</h2>
+                        </div>
+                        
+                        <p style="color: #718096; font-size: 14px; text-align: center;">
+                            This OTP will expire in <strong>5 minutes</strong>.
+                        </p>
+                        
+                        <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
+                        
+                        <p style="color: #718096; font-size: 12px; text-align: center;">
+                            If you didn't request this password reset, please ignore this email.
+                        </p>
+                    </div>
+                </div>
+            `
+        });
+
+        res.status(200).json({
+            success: true,
+            message: "OTP sent successfully to your email"
+        });
+
+    } catch (error) {
+        console.error("Forgot password error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to send OTP. Please try again later."
+        });
+    }
+});
+
+// ============== VERIFY OTP ===============================
+app.post("/verify-otp", async (req, res) => {
+    const { email, otp } = req.body;
+
+    if (!email || !otp) {
+        return res.status(400).json({
+            success: false,
+            message: "Email and OTP are required"
+        });
+    }
+
+    try {
+        // Find the OTP record
+        const otpRecord = await otpSchema.findOne({ 
+            email: email.trim(),
+            otp: otp.trim()
+        });
+
+        if (!otpRecord) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid OTP"
+            });
+        }
+
+        // Check if OTP is expired
+        if (new Date() > otpRecord.expiry) {
+            await otpSchema.deleteOne({ _id: otpRecord._id });
+            return res.status(400).json({
+                success: false,
+                message: "OTP has expired. Please request a new one."
+            });
+        }
+
+        // OTP is valid - delete it immediately after verification
+        await otpSchema.deleteOne({ _id: otpRecord._id });
+
+        // Generate a temporary reset token (valid for 10 minutes)
+        const resetToken = jwt.sign(
+            { email: email.trim() },
+            process.env.JWT_SECRET ,
+            { expiresIn: '10m' }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: "OTP verified successfully",
+            resetToken: resetToken
+        });
+
+    } catch (error) {
+        console.error("OTP verification error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to verify OTP"
+        });
+    }
+});
+
+// ============== RESET PASSWORD ===============================
+app.patch("/reset-password", async (req, res) => {
+    const { email, password, resetToken } = req.body;
+
+    if (!email || !password || !resetToken) {
+        return res.status(400).json({
+            success: false,
+            message: "Email, password, and reset token are required"
+        });
+    }
+
+    // Validate password strength
+    if (password.length < 6) {
+        return res.status(400).json({
+            success: false,
+            message: "Password must be at least 6 characters long"
+        });
+    }
+
+    try {
+        // Verify the reset token
+        let decoded;
+        try {
+            decoded = jwt.verify(resetToken, process.env.JWT_SECRET );
+        } catch (tokenError) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid or expired reset token. Please request a new OTP."
+            });
+        }
+
+        // Verify the email in token matches
+        if (decoded.email !== email.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid reset request"
+            });
+        }
+
+        // Find user
+        const user = await Users.findOne({ 
+            email: { $regex: new RegExp(`^${email.trim()}$`, "i") } 
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found"
+            });
+        }
+
+        // Hash new password
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
+        
+        // Update password
+        user.password = hashedPassword;
+        await user.save();
+
+        // Clear all OTPs for this user
+        await otpSchema.deleteMany({ email: email.trim() });
+
+        res.status(200).json({
+            success: true,
+            message: "Password reset successfully. Please login with your new password."
+        });
+
+    } catch (error) {
+        console.error("Reset password error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Failed to reset password. Please try again."
+        });
+    }
+});
 // ================= online users =================
 app.get("/admin/online-users", (req, res) => {
   try {
@@ -1339,7 +1561,7 @@ app.post("/admin/drives", async (req, res) => {
 
     // Send email notifications to students (ASYNCHRONOUSLY)
     // Don't await - let it run in background
-    sendDriveNotificationEmails(driveData).catch(error => {
+    sendDriveNotificationEmails(driveData).catch((error) => {
       console.error("❌ Error sending email notifications:", error);
     });
 
@@ -1358,14 +1580,11 @@ app.post("/admin/drives", async (req, res) => {
 });
 
 // ================= sending email ================================
-async function sendDriveNotificationEmails(driveData){
-  try{
+async function sendDriveNotificationEmails(driveData) {
+  try {
     console.log("📧 Starting to send drive notification emails...");
 
-    const students = await Users.find(
-      { role : "student"},
-      "name email"
-    )
+    const students = await Users.find({ role: "student" }, "name email");
     if (!students || students.length === 0) {
       console.log("⚠️ No students found to send notifications");
       return;
@@ -1373,17 +1592,16 @@ async function sendDriveNotificationEmails(driveData){
 
     console.log("📧 Found", students.length, "students to send notifications");
     // Format the date for email
-    const driveDate = driveData.date 
-      ? new Date(driveData.date).toLocaleDateString('en-US', {
-          weekday: 'long',
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric'
+    const driveDate = driveData.date
+      ? new Date(driveData.date).toLocaleDateString("en-US", {
+          weekday: "long",
+          year: "numeric",
+          month: "long",
+          day: "numeric",
         })
-      : 'Not specified';
+      : "Not specified";
 
-
-     // Prepare email content
+    // Prepare email content
     const emailSubject = `🚀 New Placement Drive: ${driveData.companyName}`;
     const emailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #f9f9f9; border-radius: 10px;">
@@ -1399,12 +1617,12 @@ async function sendDriveNotificationEmails(driveData){
           
           <div style="background: #f7fafc; padding: 15px; border-radius: 8px; margin: 20px 0;">
             <p style="margin: 8px 0;"><strong>🏢 Company:</strong> ${driveData.companyName}</p>
-            <p style="margin: 8px 0;"><strong>💼 Role:</strong> ${driveData.roles || 'Multiple roles available'}</p>
-            <p style="margin: 8px 0;"><strong>💰 Package:</strong> ${driveData.package || 'Not disclosed'}</p>
-            <p style="margin: 8px 0;"><strong>📍 Location:</strong> ${driveData.location || 'Multiple locations'}</p>
+            <p style="margin: 8px 0;"><strong>💼 Role:</strong> ${driveData.roles || "Multiple roles available"}</p>
+            <p style="margin: 8px 0;"><strong>💰 Package:</strong> ${driveData.package || "Not disclosed"}</p>
+            <p style="margin: 8px 0;"><strong>📍 Location:</strong> ${driveData.location || "Multiple locations"}</p>
             <p style="margin: 8px 0;"><strong>📅 Date:</strong> ${driveDate}</p>
-            ${driveData.eligibility ? `<p style="margin: 8px 0;"><strong>📋 Eligibility:</strong> ${driveData.eligibility}</p>` : ''}
-            ${driveData.description ? `<p style="margin: 8px 0;"><strong>📝 Description:</strong> ${driveData.description}</p>` : ''}
+            ${driveData.eligibility ? `<p style="margin: 8px 0;"><strong>📋 Eligibility:</strong> ${driveData.eligibility}</p>` : ""}
+            ${driveData.description ? `<p style="margin: 8px 0;"><strong>📝 Description:</strong> ${driveData.description}</p>` : ""}
           </div>
           
           <div style="background: #ebf8ff; border-left: 4px solid #1a56db; padding: 15px; margin: 20px 0;">
@@ -1417,14 +1635,18 @@ async function sendDriveNotificationEmails(driveData){
             </p>
           </div>
           
-          ${driveData.googleFormLink ? `
+          ${
+            driveData.googleFormLink
+              ? `
             <div style="text-align: center; margin: 25px 0;">
               <a href="${driveData.googleFormLink}" 
                  style="background: #1a56db; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
                 🔗 Apply Now
               </a>
             </div>
-          ` : ''}
+          `
+              : ""
+          }
           
           <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
           
@@ -1434,7 +1656,7 @@ async function sendDriveNotificationEmails(driveData){
           </p>
           
           <div style="text-align: center; margin-top: 20px;">
-            <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}" 
+            <a href="${process.env.FRONTEND_URL || "http://localhost:5173"}" 
                style="color: #1a56db; text-decoration: underline; font-size: 14px;">
               Visit TNPC Portal
             </a>
@@ -1449,7 +1671,7 @@ async function sendDriveNotificationEmails(driveData){
 
     for (let i = 0; i < students.length; i += batchSize) {
       const batch = students.slice(i, i + batchSize);
-      
+
       const batchPromises = batch.map((student) => {
         // Skip students without email
         if (!student.email) {
@@ -1457,32 +1679,37 @@ async function sendDriveNotificationEmails(driveData){
           return Promise.resolve();
         }
 
-        return transporter.sendMail({
-          from: process.env.EMAIL,
-          to: student.email,
-          subject: emailSubject,
-          html: emailHtml,
-        })
-        .then(() => {
-          console.log(`✅ Email sent to ${student.email}`);
-        })
-        .catch((error) => {
-          console.error(`❌ Failed to send email to ${student.email}:`, error.message);
-          // Don't throw - continue with other emails
-        });
+        return transporter
+          .sendMail({
+            from: process.env.EMAIL,
+            to: student.email,
+            subject: emailSubject,
+            html: emailHtml,
+          })
+          .then(() => {
+            console.log(`✅ Email sent to ${student.email}`);
+          })
+          .catch((error) => {
+            console.error(
+              `❌ Failed to send email to ${student.email}:`,
+              error.message,
+            );
+            // Don't throw - continue with other emails
+          });
       });
 
       // Wait for current batch to complete
       await Promise.allSettled(batchPromises);
-      
+
       // Add a small delay between batches to avoid rate limiting
       if (i + batchSize < students.length) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
 
-    console.log(`✅ Email notifications completed for ${students.length} students`);
-    
+    console.log(
+      `✅ Email notifications completed for ${students.length} students`,
+    );
   } catch (error) {
     console.error("❌ Error in sendDriveNotificationEmails:", error);
     throw error;
@@ -1493,11 +1720,11 @@ async function sendDriveNotificationEmails(driveData){
 app.post("/admin/test-email", async (req, res) => {
   try {
     const { email } = req.body;
-    
+
     if (!email) {
       return res.status(400).json({
         success: false,
-        message: "Email is required"
+        message: "Email is required",
       });
     }
 
@@ -1509,19 +1736,19 @@ app.post("/admin/test-email", async (req, res) => {
         <h2>Test Email</h2>
         <p>This is a test email from the TNPC Portal.</p>
         <p>If you're receiving this, the email configuration is working correctly!</p>
-      `
+      `,
     });
 
     res.json({
       success: true,
-      message: `Test email sent to ${email}`
+      message: `Test email sent to ${email}`,
     });
   } catch (error) {
     console.error("❌ Test email error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to send test email",
-      error: error.message
+      error: error.message,
     });
   }
 });

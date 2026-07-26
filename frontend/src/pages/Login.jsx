@@ -229,7 +229,7 @@ const Login = ({ setUser }) => {
     return (
         <div className="min-h-screen w-full bg-gradient-to-br from-sky-50 via-blue-50 to-indigo-50 flex items-center justify-center p-4">
             {AlertComponent}
-            
+
             <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
@@ -348,7 +348,16 @@ const Login = ({ setUser }) => {
                                 <p className="mt-1 text-xs text-red-500">{errors.password}</p>
                             )}
                         </div>
-
+                            {/* Forgot password */}
+                        <div className="flex justify-end mt-1">
+                            <button
+                                type="button"
+                                onClick={() => navigate('/forgot-password')}
+                                className="text-sm text-blue-600 hover:text-blue-700 hover:underline transition-colors font-medium"
+                            >
+                                Forgot Password?
+                            </button>
+                        </div>
                         {/* Submit Button */}
                         <motion.button
                             type="submit"
