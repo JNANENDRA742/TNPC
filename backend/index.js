@@ -27,6 +27,7 @@ const PlacedStudents = require("./models/PlacedStudents");
 const YearlyPlacements = require("./models/yearlyPlacements");
 const ActualStudentsData = require("./models/ActualStudentsData");
 const otpSchema = require("./models/otpSchema");
+const Feedback = require("./models/Feedback");
 
 // =========== socket setup =======================
 const server = http.createServer(app);
@@ -36,17 +37,92 @@ const io = initializeSocket(server);
 
 // ====================== SENDING EMAIL ===========================
 const nodemailer = require("nodemailer");
+
+// Create transporter with multiple fallback options for Render
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  host: "smtp.gmail.com",
+  port: 465,  // Use SSL port instead of TLS
+  secure: true, // Use SSL
   auth: {
     user: process.env.EMAIL,
     pass: process.env.EMAIL_PASSWORD,
   },
+  connectionTimeout: 30000,    // 30 seconds - increased
+  greetingTimeout: 30000,      // 30 seconds
+  socketTimeout: 30000,        // 30 seconds
+  pool: true,
+  maxConnections: 3,           // Reduced connections
+  maxMessages: 50,
+  tls: {
+    rejectUnauthorized: false
+  }
 });
 
+// Alternative transporter using port 587 with TLS (fallback)
+const createTransporterWithRetry = () => {
+  return nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false,
+    auth: {
+      user: process.env.EMAIL,
+      pass: process.env.EMAIL_PASSWORD,
+    },
+    connectionTimeout: 30000,
+    greetingTimeout: 30000,
+    socketTimeout: 30000,
+    pool: true,
+    maxConnections: 3,
+    maxMessages: 50,
+    tls: {
+      rejectUnauthorized: false,
+      ciphers: "SSLv3"
+    }
+  });
+};
+
+// SendGrid setup (optional - use as fallback)
+let sgMail = null;
+try {
+  sgMail = require('@sendgrid/mail');
+  if (process.env.SENDGRID_API_KEY) {
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+    console.log("✅ SendGrid initialized");
+  }
+} catch (error) {
+  console.log("ℹ️ SendGrid not installed or configured");
+}
+
+// Verify SMTP connection on startup with retry
+let transporterVerified = false;
+
+function verifyTransporter(retryCount = 0) {
+  transporter.verify((error, success) => {
+    if (error) {
+      console.error(`❌ SMTP verification failed (attempt ${retryCount + 1}):`, error.message);
+      if (retryCount < 3) {
+        console.log(`🔄 Retrying SMTP verification in 5 seconds...`);
+        setTimeout(() => verifyTransporter(retryCount + 1), 5000);
+      } else {
+        console.error("❌ SMTP verification failed after 3 attempts. Emails may not work.");
+      }
+    } else {
+      console.log("✅ SMTP server is ready to accept messages");
+      transporterVerified = true;
+    }
+  });
+}
+
+// Call verification
+verifyTransporter();
+
 // ================= CORS =================
-app.use(cors());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || "http://localhost:5173",
+  credentials: true
+}));
 app.set("io", io);
+
 // Middleware
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
@@ -65,233 +141,216 @@ const upload = multer({
     fileSize: 10 * 1024 * 1024, // 10 MB
   },
 });
+
 app.get("/", (req, res) => {
   res.send("Backend Connected Successfully");
 });
 
-// ============== FORGOT PASSWORD - REQUEST OTP ===============================
+// ================= FORGOT PASSWORD - REQUEST OTP ===============================
 app.post("/forgot-password", async (req, res) => {
-    const { email } = req.body;
+  const { email } = req.body;
 
-    // Validate email
-    if (!email) {
-        return res.status(400).json({
-            success: false,
-            message: "Email is required"
-        });
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      message: "Email is required"
+    });
+  }
+
+  try {
+    const existingUser = await Users.findOne({ 
+      email: { $regex: new RegExp(`^${email.trim()}$`, "i") } 
+    });
+    
+    if (!existingUser) {
+      return res.status(404).json({
+        success: false,
+        message: "No account found with this email address"
+      });
     }
 
-    try {
-        // Check if user exists
-        const existingUser = await Users.findOne({ 
-            email: { $regex: new RegExp(`^${email.trim()}$`, "i") } 
-        });
-        
-        if (!existingUser) {
-            return res.status(404).json({
-                success: false,
-                message: "No account found with this email address"
-            });
-        }
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiry = new Date(Date.now() + 5 * 60 * 1000);
 
-        // Generate OTP (6 digits)
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        const expiry = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+    await otpSchema.deleteMany({ email: email.trim() });
 
-        // Delete any existing OTP for this email
-        await otpSchema.deleteMany({ email: email.trim() });
+    await otpSchema.create({
+      email: email.trim(),
+      otp: otp,
+      expiry: expiry
+    });
 
-        // Save new OTP
-        await otpSchema.create({
-            email: email.trim(),
-            otp: otp,
-            expiry: expiry
-        });
+    await sendEmail({
+      to: email.trim(),
+      subject: "Password Reset OTP - TNPC Portal",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #f9f9f9; border-radius: 10px;">
+          <div style="background: linear-gradient(135deg, #1a56db, #7c3aed); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;">
+            <h1 style="color: white; margin: 0; font-size: 24px;">🔐 Password Reset</h1>
+          </div>
+          <div style="background: white; padding: 30px; border-radius: 0 0 10px 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+            <p style="color: #4a5568; font-size: 16px;">Hello ${existingUser.name || 'User'},</p>
+            <p style="color: #4a5568; font-size: 16px;">You requested to reset your password. Use the OTP below to proceed:</p>
+            
+            <div style="background: #f7fafc; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
+              <h2 style="color: #1a56db; font-size: 36px; letter-spacing: 8px; margin: 0;">${otp}</h2>
+            </div>
+            
+            <p style="color: #718096; font-size: 14px; text-align: center;">
+              This OTP will expire in <strong>5 minutes</strong>.
+            </p>
+            
+            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
+            
+            <p style="color: #718096; font-size: 12px; text-align: center;">
+              If you didn't request this password reset, please ignore this email.
+            </p>
+          </div>
+        </div>
+      `
+    });
 
-        // Send OTP via email
-        await transporter.sendMail({
-            from: process.env.EMAIL,
-            to: email.trim(),
-            subject: "Password Reset OTP - TNPC Portal",
-            html: `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #f9f9f9; border-radius: 10px;">
-                    <div style="background: linear-gradient(135deg, #1a56db, #7c3aed); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;">
-                        <h1 style="color: white; margin: 0; font-size: 24px;">🔐 Password Reset</h1>
-                    </div>
-                    <div style="background: white; padding: 30px; border-radius: 0 0 10px 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
-                        <p style="color: #4a5568; font-size: 16px;">Hello ${existingUser.name || 'User'},</p>
-                        <p style="color: #4a5568; font-size: 16px;">You requested to reset your password. Use the OTP below to proceed:</p>
-                        
-                        <div style="background: #f7fafc; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
-                            <h2 style="color: #1a56db; font-size: 36px; letter-spacing: 8px; margin: 0;">${otp}</h2>
-                        </div>
-                        
-                        <p style="color: #718096; font-size: 14px; text-align: center;">
-                            This OTP will expire in <strong>5 minutes</strong>.
-                        </p>
-                        
-                        <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
-                        
-                        <p style="color: #718096; font-size: 12px; text-align: center;">
-                            If you didn't request this password reset, please ignore this email.
-                        </p>
-                    </div>
-                </div>
-            `
-        });
+    res.status(200).json({
+      success: true,
+      message: "OTP sent successfully to your email"
+    });
 
-        res.status(200).json({
-            success: true,
-            message: "OTP sent successfully to your email"
-        });
-
-    } catch (error) {
-        console.error("Forgot password error:", error);
-        res.status(500).json({
-            success: false,
-            message: "Failed to send OTP. Please try again later."
-        });
-    }
+  } catch (error) {
+    console.error("Forgot password error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to send OTP. Please try again later."
+    });
+  }
 });
 
 // ============== VERIFY OTP ===============================
 app.post("/verify-otp", async (req, res) => {
-    const { email, otp } = req.body;
+  const { email, otp } = req.body;
 
-    if (!email || !otp) {
-        return res.status(400).json({
-            success: false,
-            message: "Email and OTP are required"
-        });
+  if (!email || !otp) {
+    return res.status(400).json({
+      success: false,
+      message: "Email and OTP are required"
+    });
+  }
+
+  try {
+    const otpRecord = await otpSchema.findOne({ 
+      email: email.trim(),
+      otp: otp.trim()
+    });
+
+    if (!otpRecord) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid OTP"
+      });
     }
 
-    try {
-        // Find the OTP record
-        const otpRecord = await otpSchema.findOne({ 
-            email: email.trim(),
-            otp: otp.trim()
-        });
-
-        if (!otpRecord) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid OTP"
-            });
-        }
-
-        // Check if OTP is expired
-        if (new Date() > otpRecord.expiry) {
-            await otpSchema.deleteOne({ _id: otpRecord._id });
-            return res.status(400).json({
-                success: false,
-                message: "OTP has expired. Please request a new one."
-            });
-        }
-
-        // OTP is valid - delete it immediately after verification
-        await otpSchema.deleteOne({ _id: otpRecord._id });
-
-        // Generate a temporary reset token (valid for 10 minutes)
-        const resetToken = jwt.sign(
-            { email: email.trim() },
-            process.env.JWT_SECRET ,
-            { expiresIn: '10m' }
-        );
-
-        res.status(200).json({
-            success: true,
-            message: "OTP verified successfully",
-            resetToken: resetToken
-        });
-
-    } catch (error) {
-        console.error("OTP verification error:", error);
-        res.status(500).json({
-            success: false,
-            message: "Failed to verify OTP"
-        });
+    if (new Date() > otpRecord.expiry) {
+      await otpSchema.deleteOne({ _id: otpRecord._id });
+      return res.status(400).json({
+        success: false,
+        message: "OTP has expired. Please request a new one."
+      });
     }
+
+    await otpSchema.deleteOne({ _id: otpRecord._id });
+
+    const resetToken = jwt.sign(
+      { email: email.trim() },
+      process.env.JWT_SECRET,
+      { expiresIn: '10m' }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "OTP verified successfully",
+      resetToken: resetToken
+    });
+
+  } catch (error) {
+    console.error("OTP verification error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to verify OTP"
+    });
+  }
 });
 
 // ============== RESET PASSWORD ===============================
 app.patch("/reset-password", async (req, res) => {
-    const { email, password, resetToken } = req.body;
+  const { email, password, resetToken } = req.body;
 
-    if (!email || !password || !resetToken) {
-        return res.status(400).json({
-            success: false,
-            message: "Email, password, and reset token are required"
-        });
-    }
+  if (!email || !password || !resetToken) {
+    return res.status(400).json({
+      success: false,
+      message: "Email, password, and reset token are required"
+    });
+  }
 
-    // Validate password strength
-    if (password.length < 6) {
-        return res.status(400).json({
-            success: false,
-            message: "Password must be at least 6 characters long"
-        });
-    }
+  if (password.length < 6) {
+    return res.status(400).json({
+      success: false,
+      message: "Password must be at least 6 characters long"
+    });
+  }
 
+  try {
+    let decoded;
     try {
-        // Verify the reset token
-        let decoded;
-        try {
-            decoded = jwt.verify(resetToken, process.env.JWT_SECRET );
-        } catch (tokenError) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid or expired reset token. Please request a new OTP."
-            });
-        }
-
-        // Verify the email in token matches
-        if (decoded.email !== email.trim()) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid reset request"
-            });
-        }
-
-        // Find user
-        const user = await Users.findOne({ 
-            email: { $regex: new RegExp(`^${email.trim()}$`, "i") } 
-        });
-
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: "User not found"
-            });
-        }
-
-        // Hash new password
-        const saltRounds = 10;
-        const hashedPassword = await bcrypt.hash(password, saltRounds);
-        
-        // Update password
-        user.password = hashedPassword;
-        await user.save();
-
-        // Clear all OTPs for this user
-        await otpSchema.deleteMany({ email: email.trim() });
-
-        res.status(200).json({
-            success: true,
-            message: "Password reset successfully. Please login with your new password."
-        });
-
-    } catch (error) {
-        console.error("Reset password error:", error);
-        res.status(500).json({
-            success: false,
-            message: "Failed to reset password. Please try again."
-        });
+      decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
+    } catch (tokenError) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired reset token. Please request a new OTP."
+      });
     }
+
+    if (decoded.email !== email.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid reset request"
+      });
+    }
+
+    const user = await Users.findOne({ 
+      email: { $regex: new RegExp(`^${email.trim()}$`, "i") } 
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    
+    user.password = hashedPassword;
+    await user.save();
+
+    await otpSchema.deleteMany({ email: email.trim() });
+
+    res.status(200).json({
+      success: true,
+      message: "Password reset successfully. Please login with your new password."
+    });
+
+  } catch (error) {
+    console.error("Reset password error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to reset password. Please try again."
+    });
+  }
 });
+
 // ================= online users =================
 app.get("/admin/online-users", (req, res) => {
   try {
-    // Convert Map to array of student IDs
     const onlineStudentIds = Array.from(onlineUsers.keys());
     res.json({
       success: true,
@@ -311,7 +370,6 @@ app.post("/create-admin", async (req, res) => {
   try {
     const { name, email, password, role = "admin" } = req.body;
 
-    // Check if admin already exists
     const existingAdmin = await Users.findOne({
       email: { $regex: new RegExp(`^${email.trim()}$`, "i") },
     });
@@ -323,11 +381,9 @@ app.post("/create-admin", async (req, res) => {
       });
     }
 
-    // Hash the password
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    // Create admin user
     const admin = await Users.create({
       name: name.trim(),
       email: email.trim(),
@@ -356,6 +412,7 @@ app.post("/create-admin", async (req, res) => {
     });
   }
 });
+
 // ================= VERIFY TOKEN ENDPOINT =================
 app.get("/verify-token", authenticateToken, async (req, res) => {
   try {
@@ -396,7 +453,6 @@ app.post("/login", async (req, res) => {
       });
     }
 
-    // Find user - CASE INSENSITIVE search
     const user = await Users.findOne({
       email: { $regex: new RegExp(`^${email.trim()}$`, "i") },
     });
@@ -408,7 +464,6 @@ app.post("/login", async (req, res) => {
       });
     }
 
-    // Check if user is active
     if (!user.isActive) {
       return res.status(403).json({
         success: false,
@@ -416,7 +471,6 @@ app.post("/login", async (req, res) => {
       });
     }
 
-    // Verify password
     const isPasswordMatch = await bcrypt.compare(password, user.password);
     if (!isPasswordMatch) {
       return res.status(401).json({
@@ -425,12 +479,10 @@ app.post("/login", async (req, res) => {
       });
     }
 
-    // Update last login
     await Users.findByIdAndUpdate(user._id, {
       lastLogin: new Date(),
     });
 
-    // Generate token
     const token = generateToken(user);
 
     res.status(200).json({
@@ -440,7 +492,7 @@ app.post("/login", async (req, res) => {
       user: {
         id: user._id,
         name: user.name,
-        email: user.email, // Return as stored (preserves case)
+        email: user.email,
         role: user.role,
       },
     });
@@ -453,12 +505,13 @@ app.post("/login", async (req, res) => {
     });
   }
 });
+
 // ================= SIGNUP =================
 app.post("/signup", async (req, res) => {
   try {
     const { email, password } = req.body;
     console.log("signup route is called");
-    // Validation
+    
     if (!email || !password) {
       return res.status(400).json({
         success: false,
@@ -466,7 +519,6 @@ app.post("/signup", async (req, res) => {
       });
     }
 
-    // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return res.status(400).json({
@@ -475,7 +527,6 @@ app.post("/signup", async (req, res) => {
       });
     }
 
-    // Validate password strength
     if (password.length < 6) {
       return res.status(400).json({
         success: false,
@@ -496,7 +547,6 @@ app.post("/signup", async (req, res) => {
       });
     }
 
-    // IMPORTANT: Check if user exists - CASE INSENSITIVE query for uniqueness
     const existingUser = await Users.findOne({
       email: { $regex: new RegExp(`^${trimmedEmail}$`, "i") },
     });
@@ -508,11 +558,9 @@ app.post("/signup", async (req, res) => {
       });
     }
 
-    // Hash password
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    // Create user
     const newUser = await Users.create({
       name: checkValidStudent.name.trim(),
       email: trimmedEmail,
@@ -520,7 +568,6 @@ app.post("/signup", async (req, res) => {
       role: "student",
     });
 
-    // Create student profile with default values
     await StudentProfile.create({
       student: newUser._id,
       studentId: checkValidStudent.id_no.trim(),
@@ -550,10 +597,8 @@ app.post("/signup", async (req, res) => {
       shortlisted_drives: [],
     });
 
-    // Generate token
     const token = generateToken(newUser);
 
-    // Return student details along with user data
     res.status(201).json({
       success: true,
       message: "Registration successful",
@@ -583,6 +628,7 @@ app.post("/signup", async (req, res) => {
     });
   }
 });
+
 // ================= GET PROFILE =================
 app.get("/studentyear/:id", async (req, res) => {
   try {
@@ -629,19 +675,15 @@ app.patch("/studentprofile/:id", async (req, res) => {
     const { id } = req.params;
     const updateData = req.body;
 
-    // Create update object for Student model (Users collection)
     const studentUpdate = {
       name: updateData.name,
       email: updateData.email,
     };
 
-    // Update Student model (Users collection)
     await Users.findByIdAndUpdate(id, studentUpdate, {
       new: true,
     });
 
-    // Prepare profile update - this is for StudentProfile collection
-    // NOTE: year, studentId, department, and gender are read-only
     const profileUpdate = {
       "profile.phone": updateData.profile?.phone,
       "profile.cgpa": updateData.profile?.cgpa,
@@ -695,13 +737,12 @@ app.patch("/studentprofile/:id", async (req, res) => {
 
 // ================= FILE UPLOADS TO MONGODB =================
 
-// Configure multer for memory storage (no disk storage)
 const storage = multer.memoryStorage();
 
 const fileUpload = multer({
   storage: storage,
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
+    fileSize: 10 * 1024 * 1024,
   },
 });
 
@@ -716,8 +757,6 @@ app.post(
       }
 
       const userId = req.params.id;
-
-      // Convert file to base64 string
       const base64Image = req.file.buffer.toString("base64");
       const fileType = req.file.mimetype;
 
@@ -776,8 +815,6 @@ app.post("/uploadResume/:id", fileUpload.single("resume"), async (req, res) => {
     }
 
     const userId = req.params.id;
-
-    // Convert file to base64 string
     const base64Resume = req.file.buffer.toString("base64");
     const fileType = req.file.mimetype;
     const fileName = req.file.originalname;
@@ -894,6 +931,7 @@ app.get("/placedStudents", async (req, res) => {
     res.status(500).json({ message: "Server Error" });
   }
 });
+
 // ================= APPLY FOR DRIVE =================
 app.post("/applyDrive/:studentId", async (req, res) => {
   const { studentId } = req.params;
@@ -1023,7 +1061,6 @@ app.post("/admin/students", async (req, res) => {
     req.body;
 
   try {
-    // 1. Validate required fields
     if (!name || !email || !password || !studentId) {
       return res.status(400).json({
         success: false,
@@ -1031,7 +1068,6 @@ app.post("/admin/students", async (req, res) => {
       });
     }
 
-    // 2. Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return res.status(400).json({
@@ -1040,7 +1076,6 @@ app.post("/admin/students", async (req, res) => {
       });
     }
 
-    // 3. Validate password strength
     if (password.length < 6) {
       return res.status(400).json({
         success: false,
@@ -1048,7 +1083,6 @@ app.post("/admin/students", async (req, res) => {
       });
     }
 
-    // 4. Validate year
     const validYears = ["1st", "2nd", "3rd", "4th", "1", "2", "3", "4"];
     if (year && !validYears.includes(year.toString().trim())) {
       return res.status(400).json({
@@ -1057,11 +1091,9 @@ app.post("/admin/students", async (req, res) => {
       });
     }
 
-    // 5. Trim email for consistent comparison
     const trimmedEmail = email.trim();
     const trimmedYear = year ? year.toString().trim() : "4th";
 
-    // 6. Check if user already exists in Users collection
     const existingUser = await Users.findOne({
       email: { $regex: new RegExp(`^${trimmedEmail}$`, "i") },
     });
@@ -1073,7 +1105,6 @@ app.post("/admin/students", async (req, res) => {
       });
     }
 
-    // 7. Check if student ID already exists in StudentProfile
     const existingId = await StudentProfile.findOne({
       studentId: studentId.trim(),
     });
@@ -1081,17 +1112,14 @@ app.post("/admin/students", async (req, res) => {
     if (existingId) {
       return res.status(400).json({
         success: false,
-        message:
-          "Student ID already exists! Please verify your student ID and try again",
+        message: "Student ID already exists!",
       });
     }
 
-    // 8. Check if student exists in ActualStudentsData
     let checkValidStudent = await ActualStudentsData.findOne({
       email: { $regex: new RegExp(`^${trimmedEmail}$`, "i") },
     });
 
-    // If student doesn't exist in ActualStudentsData, create a new record
     if (!checkValidStudent) {
       try {
         checkValidStudent = await ActualStudentsData.create({
@@ -1100,7 +1128,7 @@ app.post("/admin/students", async (req, res) => {
           id_no: studentId.trim(),
           department: department || "Not Specified",
           gender: "Not Specified",
-          year: trimmedYear, // Use the year from frontend
+          year: trimmedYear,
           createdAt: new Date(),
           updatedAt: new Date(),
         });
@@ -1114,11 +1142,9 @@ app.post("/admin/students", async (req, res) => {
       }
     }
 
-    // 9. Hash the password
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    // 10. Create user
     const newStudent = await Users.create({
       name: name.trim(),
       email: trimmedEmail,
@@ -1128,15 +1154,13 @@ app.post("/admin/students", async (req, res) => {
       createdAt: new Date(),
     });
 
-    // 11. Create student profile with the year from frontend
     const studentProfile = await StudentProfile.create({
       student: newStudent._id,
       studentId: studentId.trim(),
-      year: trimmedYear, // Use the year from frontend
+      year: trimmedYear,
       profile: {
         phone: phone || "",
-        department:
-          department || checkValidStudent?.department || "Not Specified",
+        department: department || checkValidStudent?.department || "Not Specified",
         cgpa: parseFloat(cgpa) || 0,
         skills: [],
         projects: [],
@@ -1159,7 +1183,6 @@ app.post("/admin/students", async (req, res) => {
       shortlisted_drives: [],
     });
 
-    // 12. Return success response
     res.status(201).json({
       success: true,
       message: "Student added successfully",
@@ -1191,7 +1214,6 @@ app.patch("/admin/students/:id", async (req, res) => {
       return res.status(400).json({ message: "Invalid student ID format" });
     }
 
-    // Update User model
     const userUpdate = {
       name: updateData.name,
       email: updateData.email,
@@ -1199,7 +1221,6 @@ app.patch("/admin/students/:id", async (req, res) => {
 
     await Users.findByIdAndUpdate(id, userUpdate);
 
-    // Update StudentProfile
     const profileUpdate = {
       studentId: updateData.studentId,
       "profile.department": updateData.department,
@@ -1252,30 +1273,25 @@ app.delete("/admin/students/:id", async (req, res) => {
 
 // ================= DEPARTMENT STUDENT STATS =================
 
-// Get students grouped by department (protected route)
 app.get(
   "/admin/students/department-stats",
   authenticateToken,
   async (req, res) => {
     try {
-      // Populate student data
       const students = await StudentProfile.find({}).populate("student");
 
-      // Group students by department
       const departmentStats = {};
       const departmentStudents = {};
 
       students.forEach((student) => {
         const department = student.profile?.department || "Not Specified";
 
-        // Count students per department
         if (!departmentStats[department]) {
           departmentStats[department] = 0;
           departmentStudents[department] = [];
         }
         departmentStats[department]++;
 
-        // Store student details - safely access nested properties
         departmentStudents[department].push({
           id: student._id,
           name: student.student?.name || "Unknown",
@@ -1288,7 +1304,6 @@ app.get(
         });
       });
 
-      // Sort departments alphabetically
       const sortedDepartments = Object.keys(departmentStats).sort();
       const result = {};
       sortedDepartments.forEach((dept) => {
@@ -1318,7 +1333,6 @@ app.get(
   },
 );
 
-// Get students for a specific department
 app.get("/admin/students/department/:department", async (req, res) => {
   try {
     const { department } = req.params;
@@ -1352,13 +1366,11 @@ app.get("/admin/students/department/:department", async (req, res) => {
   }
 });
 
-// Get department stats with placement info
 app.get("/admin/departments/stats-full", async (req, res) => {
   try {
     const students = await StudentProfile.find({}).populate("student");
     const placements = await PlacedStudents.find({});
 
-    // Group students by department
     const departmentStats = {};
     const departmentStudents = {};
     const departmentPlacements = {};
@@ -1384,7 +1396,6 @@ app.get("/admin/departments/stats-full", async (req, res) => {
       });
     });
 
-    // Group placements by department
     placements.forEach((placement) => {
       const department = placement.department || "Not Specified";
       if (departmentPlacements[department]) {
@@ -1397,7 +1408,6 @@ app.get("/admin/departments/stats-full", async (req, res) => {
       }
     });
 
-    // Sort departments alphabetically
     const sortedDepartments = Object.keys(departmentStats).sort();
     const result = {};
     sortedDepartments.forEach((dept) => {
@@ -1429,7 +1439,7 @@ app.get("/admin/departments/stats-full", async (req, res) => {
     });
   }
 });
-// Get placement stats by department
+
 app.get("/admin/departments/placement-stats", async (req, res) => {
   try {
     const placements = await PlacedStudents.find({});
@@ -1437,7 +1447,6 @@ app.get("/admin/departments/placement-stats", async (req, res) => {
 
     const deptStats = {};
 
-    // Count students per department
     students.forEach((student) => {
       const dept = student.profile?.department || "Not Specified";
       if (!deptStats[dept]) {
@@ -1450,7 +1459,6 @@ app.get("/admin/departments/placement-stats", async (req, res) => {
       deptStats[dept].totalStudents++;
     });
 
-    // Count placements per department
     placements.forEach((placement) => {
       const dept = placement.department || "Not Specified";
       if (deptStats[dept]) {
@@ -1465,7 +1473,6 @@ app.get("/admin/departments/placement-stats", async (req, res) => {
       }
     });
 
-    // Calculate placement rate for each department
     const result = {};
     Object.keys(deptStats).forEach((dept) => {
       const data = deptStats[dept];
@@ -1490,7 +1497,7 @@ app.get("/admin/departments/placement-stats", async (req, res) => {
     });
   }
 });
-// Get recent student registrations with department info
+
 app.get("/admin/students/recent", async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 20;
@@ -1523,13 +1530,12 @@ app.get("/admin/students/recent", async (req, res) => {
     });
   }
 });
+
 // ---------- DRIVE ROUTES ----------
-// ===================== creating drive and sending email while creating drive ====================
 app.post("/admin/drives", async (req, res) => {
   try {
     console.log("📝 Creating drive with data:", req.body);
 
-    // Validate required fields
     if (!req.body.companyName) {
       return res.status(400).json({
         success: false,
@@ -1559,8 +1565,6 @@ app.post("/admin/drives", async (req, res) => {
 
     console.log("✅ Drive created successfully:", drive);
 
-    // Send email notifications to students (ASYNCHRONOUSLY)
-    // Don't await - let it run in background
     sendDriveNotificationEmails(driveData).catch((error) => {
       console.error("❌ Error sending email notifications:", error);
     });
@@ -1579,7 +1583,77 @@ app.post("/admin/drives", async (req, res) => {
   }
 });
 
-// ================= sending email ================================
+// ================= EMAIL SENDING FUNCTION WITH RETRY AND SENDGRID FALLBACK ================================
+
+// Helper function to send email using multiple methods
+async function sendEmail({ to, subject, html }) {
+  // Try Gmail first
+  try {
+    console.log(`📧 Sending email to ${to} via Gmail...`);
+    const info = await transporter.sendMail({
+      from: process.env.EMAIL,
+      to: to,
+      subject: subject,
+      html: html,
+    });
+    console.log(`✅ Email sent via Gmail to ${to}`);
+    return { success: true, method: 'gmail', info };
+  } catch (gmailError) {
+    console.log(`❌ Gmail failed for ${to}:`, gmailError.message);
+    
+    // Try SendGrid as fallback if available
+    if (sgMail && process.env.SENDGRID_API_KEY) {
+      try {
+        console.log(`📧 Sending email to ${to} via SendGrid...`);
+        const msg = {
+          to: to,
+          from: process.env.EMAIL,
+          subject: subject,
+          html: html,
+        };
+        await sgMail.send(msg);
+        console.log(`✅ Email sent via SendGrid to ${to}`);
+        return { success: true, method: 'sendgrid' };
+      } catch (sendgridError) {
+        console.log(`❌ SendGrid also failed for ${to}:`, sendgridError.message);
+        throw sendgridError;
+      }
+    }
+    throw gmailError;
+  }
+}
+
+// Function to send email with retry
+async function sendEmailWithRetry(student, subject, html, retryCount = 0) {
+  const maxRetries = 3;
+  const delay = 2000 * (retryCount + 1);
+
+  try {
+    console.log(`📤 Attempting to send email to ${student.email} (attempt ${retryCount + 1})`);
+    
+    const result = await sendEmail({
+      to: student.email,
+      subject: subject,
+      html: html,
+    });
+    
+    console.log(`✅ Email sent to ${student.email} via ${result.method}`);
+    return { success: true, student: student.email, method: result.method };
+  } catch (error) {
+    console.error(`❌ Failed to send email to ${student.email} (attempt ${retryCount + 1})`);
+    console.error("Error code:", error.code || error.response?.status);
+    console.error("Error message:", error.message);
+    
+    if (retryCount < maxRetries) {
+      console.log(`🔄 Retrying ${student.email} in ${delay/1000}s...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return sendEmailWithRetry(student, subject, html, retryCount + 1);
+    }
+    
+    return { success: false, student: student.email, error: error.message };
+  }
+}
+
 async function sendDriveNotificationEmails(driveData) {
   try {
     console.log("📧 Starting to send drive notification emails...");
@@ -1590,7 +1664,15 @@ async function sendDriveNotificationEmails(driveData) {
       return;
     }
 
-    console.log("📧 Found", students.length, "students to send notifications");
+    console.log(`📧 Found ${students.length} students to send notifications`);
+    console.log(`📧 Using email: ${process.env.EMAIL}`);
+    console.log(`📧 Email password set: ${!!process.env.EMAIL_PASSWORD}`);
+    if (sgMail && process.env.SENDGRID_API_KEY) {
+      console.log(`📧 SendGrid fallback: ✅ Available`);
+    } else {
+      console.log(`📧 SendGrid fallback: ❌ Not configured`);
+    }
+
     // Format the date for email
     const driveDate = driveData.date
       ? new Date(driveData.date).toLocaleDateString("en-US", {
@@ -1665,58 +1747,55 @@ async function sendDriveNotificationEmails(driveData) {
       </div>
     `;
 
-    // Send emails in batches to avoid overwhelming the server
-    const batchSize = 50;
-    const emailPromises = [];
+    const batchSize = 10;
+    let successCount = 0;
+    let failCount = 0;
+    const results = [];
 
     for (let i = 0; i < students.length; i += batchSize) {
       const batch = students.slice(i, i + batchSize);
+      
+      console.log(`📤 Processing batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(students.length / batchSize)}`);
 
-      const batchPromises = batch.map((student) => {
-        // Skip students without email
+      for (const student of batch) {
         if (!student.email) {
           console.log(`⚠️ Skipping student ${student.name} - no email`);
-          return Promise.resolve();
+          continue;
         }
 
-        return transporter
-          .sendMail({
-            from: process.env.EMAIL,
-            to: student.email,
-            subject: emailSubject,
-            html: emailHtml,
-          })
-          .then(() => {
-            console.log(`✅ Email sent to ${student.email}`);
-          })
-          .catch((error) => {
-            console.error(
-              `❌ Failed to send email to ${student.email}:`,
-              error.message,
-            );
-            // Don't throw - continue with other emails
-          });
-      });
+        if (results.length > 0) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
 
-      // Wait for current batch to complete
-      await Promise.allSettled(batchPromises);
+        const result = await sendEmailWithRetry(student, emailSubject, emailHtml);
+        results.push(result);
+        if (result.success) {
+          successCount++;
+        } else {
+          failCount++;
+        }
+      }
 
-      // Add a small delay between batches to avoid rate limiting
       if (i + batchSize < students.length) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        console.log(`⏳ Waiting 3 seconds before next batch...`);
+        await new Promise((resolve) => setTimeout(resolve, 3000));
       }
     }
 
-    console.log(
-      `✅ Email notifications completed for ${students.length} students`,
-    );
+    console.log(`✅ Email notifications completed`);
+    console.log(`📊 Summary: ${successCount} sent, ${failCount} failed, ${students.length} total students`);
+
+    const failedEmails = results.filter(r => !r.success);
+    if (failedEmails.length > 0) {
+      console.warn(`⚠️ Failed emails:`, failedEmails.map(r => r.student));
+    }
   } catch (error) {
     console.error("❌ Error in sendDriveNotificationEmails:", error);
     throw error;
   }
 }
 
-// Optional: Endpoint to test email sending or not (using postman)
+// Optional: Endpoint to test email sending
 app.post("/admin/test-email", async (req, res) => {
   try {
     const { email } = req.body;
@@ -1728,27 +1807,39 @@ app.post("/admin/test-email", async (req, res) => {
       });
     }
 
-    await transporter.sendMail({
-      from: process.env.EMAIL,
+    console.log(`📧 Testing email to: ${email}`);
+    console.log(`📧 Using EMAIL: ${process.env.EMAIL}`);
+    console.log(`📧 EMAIL_PASSWORD set: ${!!process.env.EMAIL_PASSWORD}`);
+    console.log(`📧 SendGrid available: ${!!sgMail && !!process.env.SENDGRID_API_KEY}`);
+
+    const result = await sendEmail({
       to: email,
       subject: "Test Email from TNPC Portal",
       html: `
         <h2>Test Email</h2>
         <p>This is a test email from the TNPC Portal.</p>
         <p>If you're receiving this, the email configuration is working correctly!</p>
+        <p>Timestamp: ${new Date().toISOString()}</p>
+        <p>Method: ${result.method || 'unknown'}</p>
       `,
     });
+
+    console.log(`✅ Test email sent successfully to ${email} via ${result.method}`);
 
     res.json({
       success: true,
       message: `Test email sent to ${email}`,
+      method: result.method,
+      info: result.info
     });
   } catch (error) {
     console.error("❌ Test email error:", error);
+    
     res.status(500).json({
       success: false,
       message: "Failed to send test email",
       error: error.message,
+      code: error.code || error.response?.status
     });
   }
 });
@@ -1760,7 +1851,6 @@ app.patch("/admin/drives/:id", async (req, res) => {
 
     console.log("📝 Updating drive with data:", updateData);
 
-    // Validate the ID
     if (!Types.ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
@@ -1768,7 +1858,6 @@ app.patch("/admin/drives/:id", async (req, res) => {
       });
     }
 
-    // Build update object
     const updateFields = {};
 
     if (updateData.companyName !== undefined)
@@ -1789,7 +1878,6 @@ app.patch("/admin/drives/:id", async (req, res) => {
 
     updateFields.updatedAt = new Date();
 
-    // Find the drive first
     const existingDrive = await CompanyDrives.findById(id);
     if (!existingDrive) {
       return res.status(404).json({
@@ -1798,7 +1886,6 @@ app.patch("/admin/drives/:id", async (req, res) => {
       });
     }
 
-    // Update the drive
     const drive = await CompanyDrives.findByIdAndUpdate(
       id,
       { $set: updateFields },
@@ -1852,6 +1939,7 @@ app.delete("/admin/drives/:id", async (req, res) => {
     });
   }
 });
+
 // ---------- PLACEMENT ROUTES ----------
 app.get("/admin/placements", async (req, res) => {
   try {
@@ -1863,7 +1951,6 @@ app.get("/admin/placements", async (req, res) => {
   }
 });
 
-// Update the POST /admin/placements route to return the created placement with timestamps
 app.post("/admin/placements", async (req, res) => {
   try {
     const { name, company, package: pkg, department, year } = req.body;
@@ -1875,7 +1962,6 @@ app.post("/admin/placements", async (req, res) => {
       year: year || new Date().getFullYear(),
     });
 
-    // Return the created placement with all fields including timestamps
     res.status(201).json({
       message: "Placement added successfully",
       placement: newPlacement,
@@ -1927,11 +2013,9 @@ app.get("/debug/placements", async (req, res) => {
 /// ==================== Department-Stats ====================
 app.get("/admin/department/stats", authenticateToken, async (req, res) => {
   try {
-    // Get all students with populated student data
     const students = await StudentProfile.find({}).populate("student").lean();
     const placements = await PlacedStudents.find({}).lean();
 
-    // Define department mappings (both directions)
     const departmentMapping = {
       CSE: "Computer Science & Engineering",
       CS: "Computer Science & Engineering",
@@ -1939,8 +2023,7 @@ app.get("/admin/department/stats", authenticateToken, async (req, res) => {
       "Computer Science and Engineering": "Computer Science & Engineering",
       ECE: "Electronics & Communication Engineering",
       Electronics: "Electronics & Communication Engineering",
-      "Electronics and Communication":
-        "Electronics & Communication Engineering",
+      "Electronics and Communication": "Electronics & Communication Engineering",
       EEE: "Electrical & Electronics Engineering",
       Electrical: "Electrical & Electronics Engineering",
       "Electrical and Electronics": "Electrical & Electronics Engineering",
@@ -1959,7 +2042,6 @@ app.get("/admin/department/stats", authenticateToken, async (req, res) => {
       "Machine Learning": "Artificial Intelligence & Machine Learning",
     };
 
-    // Reverse mapping for display
     const reverseMapping = {
       "Computer Science & Engineering": "CSE",
       "Electronics & Communication Engineering": "ECE",
@@ -1980,12 +2062,10 @@ app.get("/admin/department/stats", authenticateToken, async (req, res) => {
       return reverseMapping[dept] || dept;
     };
 
-    // Initialize department stats
     const departmentStats = {};
     const incompleteProfiles = [];
     const notSpecifiedStudents = [];
 
-    // Process placements first
     placements.forEach((placement) => {
       const department = normalizeDepartment(placement.department);
 
@@ -2010,7 +2090,6 @@ app.get("/admin/department/stats", authenticateToken, async (req, res) => {
       });
     });
 
-    // Process students
     let totalStudentsCount = 0;
     let studentsWithValidCGPA = 0;
 
@@ -2020,12 +2099,10 @@ app.get("/admin/department/stats", authenticateToken, async (req, res) => {
 
       totalStudentsCount++;
 
-      // Track students with valid CGPA
       if (cgpa > 0) {
         studentsWithValidCGPA++;
       }
 
-      // Check for incomplete profiles
       const hasIssue = !student.profile || !student.student || cgpa === 0;
       if (hasIssue) {
         let issue = "";
@@ -2046,7 +2123,6 @@ app.get("/admin/department/stats", authenticateToken, async (req, res) => {
         });
       }
 
-      // Check for no department
       if (
         !student.profile?.department ||
         student.profile.department.trim() === ""
@@ -2061,7 +2137,6 @@ app.get("/admin/department/stats", authenticateToken, async (req, res) => {
         });
       }
 
-      // Initialize department if not exists
       if (!departmentStats[department]) {
         departmentStats[department] = {
           department: department,
@@ -2074,7 +2149,6 @@ app.get("/admin/department/stats", authenticateToken, async (req, res) => {
         };
       }
 
-      // Add student to department (including those with 0 CGPA for total count)
       departmentStats[department].totalStudents++;
 
       if (cgpa > 0) {
@@ -2092,7 +2166,6 @@ app.get("/admin/department/stats", authenticateToken, async (req, res) => {
       });
     });
 
-    // Ensure "Not Specified" department exists
     if (notSpecifiedStudents.length > 0 || incompleteProfiles.length > 0) {
       if (!departmentStats["Not Specified"]) {
         departmentStats["Not Specified"] = {
@@ -2107,17 +2180,14 @@ app.get("/admin/department/stats", authenticateToken, async (req, res) => {
       }
     }
 
-    // Format response
     const sortedDepartments = Object.values(departmentStats)
       .map((dept) => {
-        // Calculate average CGPA only from students with valid CGPA
         const studentsWithCGPA = dept.students.filter((s) => s.cgpa > 0);
         const avgCGPA =
           studentsWithCGPA.length > 0
             ? parseFloat((dept.totalCGPA / studentsWithCGPA.length).toFixed(2))
             : 0;
 
-        // Calculate placement percentage based on total students
         const placementPercentage =
           dept.totalStudents > 0
             ? parseFloat(
@@ -2125,12 +2195,10 @@ app.get("/admin/department/stats", authenticateToken, async (req, res) => {
               )
             : 0;
 
-        // Sort placements by year (most recent first)
         const sortedPlacements = [...dept.placements].sort(
           (a, b) => b.year - a.year,
         );
 
-        // Sort students by CGPA (highest first)
         const sortedStudents = [...dept.students].sort(
           (a, b) => b.cgpa - a.cgpa,
         );
@@ -2147,17 +2215,14 @@ app.get("/admin/department/stats", authenticateToken, async (req, res) => {
         };
       })
       .filter((dept) => {
-        // Keep departments with students or placements
         if (dept.department === "Not Specified") {
           return dept.students.length > 0 || dept.placements.length > 0;
         }
         return dept.totalStudents > 0 || dept.placedStudents > 0;
       })
       .sort((a, b) => {
-        // Put "Not Specified" at the end
         if (a.department === "Not Specified") return 1;
         if (b.department === "Not Specified") return -1;
-        // Sort by placement percentage (highest first)
         return b.placementPercentage - a.placementPercentage;
       });
 
@@ -2202,8 +2267,7 @@ app.post("/upload-actual-students", upload.single("file"), async (req, res) => {
     if (!validTypes.includes(req.file.mimetype)) {
       return res.status(400).json({
         success: false,
-        message:
-          "Invalid file type. Please upload CSV or Excel file (.csv, .xls, .xlsx)",
+        message: "Invalid file type. Please upload CSV or Excel file (.csv, .xls, .xlsx)",
       });
     }
     let data = [];
@@ -2226,6 +2290,7 @@ app.post("/upload-actual-students", upload.single("file"), async (req, res) => {
     return res.status(500).json({ message: "Server Error" });
   }
 });
+
 // =================== UPLOADING EXCEL (OR) CSV FILE ====================
 app.post(
   "/admin/upload-placements",
@@ -2235,7 +2300,6 @@ app.post(
   async (req, res) => {
     console.log("📤 File upload request received");
     try {
-      // Check if file exists
       if (!req.file) {
         return res.status(400).json({
           success: false,
@@ -2243,7 +2307,6 @@ app.post(
         });
       }
 
-      // Validate file type
       const validTypes = [
         "text/csv",
         "application/vnd.ms-excel",
@@ -2253,12 +2316,10 @@ app.post(
       if (!validTypes.includes(req.file.mimetype)) {
         return res.status(400).json({
           success: false,
-          message:
-            "Invalid file type. Please upload CSV or Excel file (.csv, .xls, .xlsx)",
+          message: "Invalid file type. Please upload CSV or Excel file (.csv, .xls, .xlsx)",
         });
       }
 
-      // Parse the file
       let data = [];
       try {
         const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
@@ -2268,12 +2329,10 @@ app.post(
       } catch (parseError) {
         return res.status(400).json({
           success: false,
-          message:
-            "Failed to parse file. Please ensure it's a valid CSV or Excel file.",
+          message: "Failed to parse file. Please ensure it's a valid CSV or Excel file.",
         });
       }
 
-      // Check if data is empty
       if (data.length === 0) {
         return res.status(400).json({
           success: false,
@@ -2281,7 +2340,6 @@ app.post(
         });
       }
 
-      // Validate required columns
       const requiredColumns = ["Name", "Company"];
       const firstRow = data[0];
       const columns = Object.keys(firstRow);
@@ -2299,7 +2357,6 @@ app.post(
         });
       }
 
-      // Process and validate each row
       const results = [];
       const errors = [];
       let successCount = 0;
@@ -2309,7 +2366,6 @@ app.post(
         const row = data[index];
 
         try {
-          // Map columns with flexible case matching
           const name =
             row["Name"] ||
             row["name"] ||
@@ -2337,19 +2393,16 @@ app.post(
             row["Placement Year"] ||
             row["placementYear"];
 
-          // Validate required fields
           if (!name || !company) {
             errors.push({
-              row: index + 2, // +2 because 0-indexed and header row
+              row: index + 2,
               data: row,
-              error:
-                "Name and Company are required fields with no empty values",
+              error: "Name and Company are required fields with no empty values",
             });
             failCount++;
             continue;
           }
 
-          // Validate name (not empty)
           if (typeof name !== "string" || name.trim() === "") {
             errors.push({
               row: index + 2,
@@ -2360,7 +2413,6 @@ app.post(
             continue;
           }
 
-          // Validate company (not empty)
           if (typeof company !== "string" || company.trim() === "") {
             errors.push({
               row: index + 2,
@@ -2371,7 +2423,6 @@ app.post(
             continue;
           }
 
-          // Parse package
           let pkgValue = 0;
           if (packageAmount) {
             pkgValue = parseFloat(packageAmount);
@@ -2386,7 +2437,6 @@ app.post(
             }
           }
 
-          // Parse year
           let yearValue = new Date().getFullYear();
           if (year) {
             const parsedYear = parseInt(year);
@@ -2402,11 +2452,9 @@ app.post(
                 data: row,
                 error: `Invalid year: ${year}. Using current year instead.`,
               });
-              // Continue with default year
             }
           }
 
-          // Check for duplicate entry (same name + company)
           const existingPlacement = await PlacedStudents.findOne({
             name: name.trim(),
             company: company.trim(),
@@ -2422,7 +2470,6 @@ app.post(
             continue;
           }
 
-          // Create placement record
           await PlacedStudents.create({
             name: name.trim(),
             company: company.trim(),
@@ -2453,7 +2500,6 @@ app.post(
         }
       }
 
-      // Prepare response
       const response = {
         success: true,
         message: `Upload completed: ${successCount} inserted, ${failCount} failed`,
@@ -2469,7 +2515,7 @@ app.post(
       }
 
       if (errors.length > 0) {
-        response.errors = errors.slice(0, 20); // Limit errors to 20
+        response.errors = errors.slice(0, 20);
         if (errors.length > 20) {
           response.message += ` (Showing first 20 errors out of ${errors.length})`;
         }
@@ -2499,7 +2545,6 @@ app.get(
 
       const worksheet = XLSX.utils.json_to_sheet(data);
 
-      // Set column widths
       worksheet["!cols"] = [
         { wch: 25 },
         { wch: 25 },
@@ -2510,7 +2555,6 @@ app.get(
 
       XLSX.utils.book_append_sheet(workbook, worksheet, "Placements");
 
-      // Add instructions sheet
       const instructions = [
         ["Instructions for Uploading Placements"],
         [""],
@@ -2534,7 +2578,6 @@ app.get(
       const instructionSheet = XLSX.utils.aoa_to_sheet(instructions);
       XLSX.utils.book_append_sheet(workbook, instructionSheet, "Instructions");
 
-      // Generate buffer
       const buffer = XLSX.write(workbook, {
         type: "buffer",
         bookType: "xlsx",
@@ -2567,6 +2610,7 @@ app.use((err, req, res, next) => {
     message: "Internal server error",
   });
 });
+
 // ================= 404 HANDLER =================
 app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });
@@ -2577,4 +2621,8 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
   console.log(`🔌 Socket.IO is ready`);
+  console.log(`📧 Email configuration: ${process.env.EMAIL ? '✅ Set' : '❌ Missing'}`);
+  console.log(`🔑 Email password: ${process.env.EMAIL_PASSWORD ? '✅ Set' : '❌ Missing'}`);
+  console.log(`📦 MongoDB: ${process.env.MONGOURL ? '✅ Set' : '❌ Missing'}`);
+  console.log(`📧 SendGrid: ${process.env.SENDGRID_API_KEY ? '✅ Configured' : '❌ Not configured'}`);
 });
