@@ -9,7 +9,8 @@ import {
     Rocket,
     Sparkles,
     Trophy,
-    UserPlus
+    UserPlus,
+    AlertCircle
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
@@ -31,6 +32,7 @@ const Login = ({ setUser }) => {
     const [serverError, setServerError] = useState('');
     const [showSuccessPopup, setShowSuccessPopup] = useState(false);
     const [userData, setUserData] = useState(null);
+    const [failedAttempts, setFailedAttempts] = useState(0);
 
     // Check for existing session on mount
     useEffect(() => {
@@ -97,6 +99,16 @@ const Login = ({ setUser }) => {
         return Object.keys(newErrors).length === 0;
     };
 
+    // Show forgot password reminder
+    const showForgotPasswordReminder = () => {
+        showAlert(
+            '🔑 Forgot your password? Please contact the TNPC office for assistance with password reset.',
+            'info',
+            5000,
+            'Password Help'
+        );
+    };
+
     // Handle form submission
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -107,16 +119,18 @@ const Login = ({ setUser }) => {
         setServerError('');
 
         try {
-            // IMPORTANT: Don't convert email to lowercase
             const response = await axios.post(
                 `${import.meta.env.VITE_BACKEND_URL}/login`,
                 {
-                    email: formData.email.trim(), // Preserve case
+                    email: formData.email.trim(),
                     password: formData.password
                 }
             );
 
             if (response.data.success) {
+                // Reset failed attempts on successful login
+                setFailedAttempts(0);
+                
                 const { token, user } = response.data;
 
                 // Store token and user data
@@ -142,14 +156,6 @@ const Login = ({ setUser }) => {
                         loginDate: new Date().toLocaleDateString()
                     });
 
-                    // Show success alert
-                    // showAlert(
-                    //     `Welcome back ${user.name}! You are now logged in as ${user.role}.`,
-                    //     'success',
-                    //     4000,
-                    //     '🎉 Login Successful!'
-                    // );
-
                     // Show success popup
                     setShowSuccessPopup(true);
 
@@ -166,7 +172,20 @@ const Login = ({ setUser }) => {
             } else {
                 const errorMsg = response.data.message || 'Login failed';
                 setServerError(errorMsg);
+                
+                // Increment failed attempts
+                const newAttempts = failedAttempts + 1;
+                setFailedAttempts(newAttempts);
+                
+                // Show error alert
                 showAlert(errorMsg, 'error', 4000);
+                
+                // Show forgot password reminder after 2 failed attempts
+                if (newAttempts >= 2) {
+                    setTimeout(() => {
+                        showForgotPasswordReminder();
+                    }, 500);
+                }
             }
         } catch (error) {
             console.error('Login Error:', error);
@@ -175,9 +194,21 @@ const Login = ({ setUser }) => {
 
             if (error.response) {
                 errorMessage = error.response.data.message || errorMessage;
+                
+                // Increment failed attempts
+                const newAttempts = failedAttempts + 1;
+                setFailedAttempts(newAttempts);
+                
                 // Specific error handling based on status
                 if (error.response.status === 401) {
                     showAlert('Invalid email or password. Please try again.', 'error', 4000);
+                    
+                    // Show forgot password reminder after 2 failed attempts
+                    if (newAttempts >= 2) {
+                        setTimeout(() => {
+                            showForgotPasswordReminder();
+                        }, 500);
+                    }
                 } else if (error.response.status === 403) {
                     showAlert('Account is deactivated. Please contact admin.', 'error', 4000);
                 } else {
@@ -275,6 +306,29 @@ const Login = ({ setUser }) => {
                         <p className="text-gray-500">Sign in to your account</p>
                     </div>
 
+                    {/* Failed Attempts Indicator */}
+                    {failedAttempts > 0 && (
+                        <motion.div
+                            initial={{ opacity: 0, y: -10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg"
+                        >
+                            <div className="flex items-start gap-2">
+                                <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+                                <div>
+                                    <p className="text-sm text-yellow-800">
+                                        <span className="font-semibold">{failedAttempts}</span> failed login attempt{failedAttempts > 1 ? 's' : ''}
+                                    </p>
+                                    {failedAttempts >= 2 && (
+                                        <p className="text-xs text-yellow-700 mt-1">
+                                            💡 Forgot your password? Please contact the TNPC office for assistance.
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+                        </motion.div>
+                    )}
+
                     {/* Server Error */}
                     <AnimatePresence>
                         {serverError && (
@@ -348,16 +402,21 @@ const Login = ({ setUser }) => {
                                 <p className="mt-1 text-xs text-red-500">{errors.password}</p>
                             )}
                         </div>
-                            {/* Forgot password */}
-                        {/* <div className="flex justify-end mt-1">
+
+                        {/* Forgot Password Info */}
+                        <div className="flex justify-between items-center mt-1">
+                            <p className="text-xs text-gray-500">
+                                <span className="text-yellow-600">ℹ️</span> Forgot password? Contact TNPC office
+                            </p>
                             <button
                                 type="button"
-                                onClick={() => navigate('/forgot-password')}
-                                className="text-sm text-blue-600 hover:text-blue-700 hover:underline transition-colors font-medium"
+                                onClick={showForgotPasswordReminder}
+                                className="text-xs text-blue-600 hover:text-blue-700 hover:underline transition-colors font-medium"
                             >
-                                Forgot Password?
+                                Need Help?
                             </button>
-                        </div> */}
+                        </div>
+
                         {/* Submit Button */}
                         <motion.button
                             type="submit"
