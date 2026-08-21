@@ -349,7 +349,7 @@ const Login = ({ setUser }) => {
                             )}
                         </div>
                             {/* Forgot password */}
-                        <div className="flex justify-end mt-1">
+                        {/* <div className="flex justify-end mt-1">
                             <button
                                 type="button"
                                 onClick={() => navigate('/forgot-password')}
@@ -357,7 +357,7 @@ const Login = ({ setUser }) => {
                             >
                                 Forgot Password?
                             </button>
-                        </div>
+                        </div> */}
                         {/* Submit Button */}
                         <motion.button
                             type="submit"

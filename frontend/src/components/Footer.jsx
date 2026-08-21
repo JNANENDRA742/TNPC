@@ -36,7 +36,7 @@ const Footer = () => {
     <footer className="w-full bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-white">
       {/* Main Footer */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 pb-8">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 lg:gap-12">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 lg:gap-12 ">
           
           {/* Brand Section */}
           <motion.div
@@ -64,7 +64,7 @@ const Footer = () => {
 
             
             {/* Social Links */}
-            <div className="flex gap-2 pt-2">
+            {/* <div className="flex gap-2 pt-2">
               {socialLinks.map((social, index) => (
                 <motion.a
                   key={index}
@@ -77,7 +77,7 @@ const Footer = () => {
                   {social.icon}
                 </motion.a>
               ))}
-            </div>
+            </div> */}
           </motion.div>
 
           {/* Quick Links */}
