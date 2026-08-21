@@ -9,8 +9,6 @@ const path = require("path");
 const bcrypt = require("bcrypt");
 const XLSX = require("xlsx");
 const jwt = require('jsonwebtoken');
-const nodemailer = require("nodemailer");
-const brevo = require('@getbrevo/brevo');
 
 const {
   authorizeRoles,
@@ -37,48 +35,65 @@ const server = http.createServer(app);
 const { initializeSocket, onlineUsers, getIO } = require("./socket");
 const io = initializeSocket(server);
 
-// ====================== SENDING EMAIL USING BREVO ===========================
+// ====================== SENDING EMAIL ===========================
+const nodemailer = require("nodemailer");
 
-// Initialize Brevo API client
-let brevoApiInstance = null;
-let brevoConfigured = false;
-
-try {
-  if (process.env.BREVO_API_KEY) {
-    const apiClient = brevo.ApiClient.instance;
-    const apiKey = apiClient.authentications['api-key'];
-    apiKey.apiKey = process.env.BREVO_API_KEY;
-    
-    brevoApiInstance = new brevo.TransactionalEmailsApi();
-    brevoConfigured = true;
-    console.log("✅ Brevo API initialized successfully");
-  } else {
-    console.log("⚠️ BREVO_API_KEY not found in environment variables");
-  }
-} catch (error) {
-  console.error("❌ Failed to initialize Brevo:", error.message);
-}
-
-// Fallback to Gmail SMTP if Brevo fails
+// Create transporter with multiple fallback options for Render
 const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
-  port: 465,
-  secure: true,
+  port: 465,  // Use SSL port instead of TLS
+  secure: true, // Use SSL
   auth: {
     user: process.env.EMAIL,
     pass: process.env.EMAIL_PASSWORD,
   },
-  connectionTimeout: 30000,
-  greetingTimeout: 30000,
-  socketTimeout: 30000,
+  connectionTimeout: 30000,    // 30 seconds - increased
+  greetingTimeout: 30000,      // 30 seconds
+  socketTimeout: 30000,        // 30 seconds
   pool: true,
-  maxConnections: 3,
+  maxConnections: 3,           // Reduced connections
   maxMessages: 50,
   tls: {
     rejectUnauthorized: false
   }
 });
 
+// Alternative transporter using port 587 with TLS (fallback)
+const createTransporterWithRetry = () => {
+  return nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false,
+    auth: {
+      user: process.env.EMAIL,
+      pass: process.env.EMAIL_PASSWORD,
+    },
+    connectionTimeout: 30000,
+    greetingTimeout: 30000,
+    socketTimeout: 30000,
+    pool: true,
+    maxConnections: 3,
+    maxMessages: 50,
+    tls: {
+      rejectUnauthorized: false,
+      ciphers: "SSLv3"
+    }
+  });
+};
+
+// SendGrid setup (optional - use as fallback)
+let sgMail = null;
+try {
+  sgMail = require('@sendgrid/mail');
+  if (process.env.SENDGRID_API_KEY) {
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+    console.log("✅ SendGrid initialized");
+  }
+} catch (error) {
+  console.log("ℹ️ SendGrid not installed or configured");
+}
+
+// Verify SMTP connection on startup with retry
 let transporterVerified = false;
 
 function verifyTransporter(retryCount = 0) {
@@ -92,172 +107,18 @@ function verifyTransporter(retryCount = 0) {
         console.error("❌ SMTP verification failed after 3 attempts. Emails may not work.");
       }
     } else {
-      console.log("✅ SMTP server is ready to accept messages (fallback)");
+      console.log("✅ SMTP server is ready to accept messages");
       transporterVerified = true;
     }
   });
 }
 
+// Call verification
 verifyTransporter();
 
-// ================= EMAIL SENDING FUNCTIONS ================================
-
-// Send email using Brevo API (primary method)
-async function sendEmailWithBrevo({ to, subject, html }) {
-  if (!brevoConfigured || !brevoApiInstance) {
-    throw new Error("Brevo is not configured properly");
-  }
-
-  try {
-    console.log(`📧 Sending email to ${to} via Brevo...`);
-    
-    const sendSmtpEmail = new brevo.SendSmtpEmail();
-    sendSmtpEmail.subject = subject;
-    sendSmtpEmail.htmlContent = html;
-    sendSmtpEmail.sender = {
-      name: "TNPC Portal",
-      email: process.env.EMAIL || "noreply@tnpcportal.com"
-    };
-    sendSmtpEmail.to = [{ email: to }];
-    
-    // Optional: Add reply-to
-    if (process.env.EMAIL) {
-      sendSmtpEmail.replyTo = {
-        email: process.env.EMAIL,
-        name: "TNPC Portal Support"
-      };
-    }
-
-    const data = await brevoApiInstance.sendTransacEmail(sendSmtpEmail);
-    console.log(`✅ Email sent via Brevo to ${to}, Message ID: ${data.messageId}`);
-    return { 
-      success: true, 
-      method: 'brevo', 
-      messageId: data.messageId,
-      data: data 
-    };
-  } catch (error) {
-    console.error(`❌ Brevo failed for ${to}:`, error.message);
-    if (error.response) {
-      console.error('Brevo API Error:', error.response.text);
-    }
-    throw error;
-  }
-}
-
-// Send email using Gmail SMTP (fallback method)
-async function sendEmailWithGmail({ to, subject, html }) {
-  try {
-    console.log(`📧 Sending email to ${to} via Gmail (fallback)...`);
-    const info = await transporter.sendMail({
-      from: process.env.EMAIL,
-      to: to,
-      subject: subject,
-      html: html,
-    });
-    console.log(`✅ Email sent via Gmail to ${to}`);
-    return { success: true, method: 'gmail', info };
-  } catch (error) {
-    console.error(`❌ Gmail failed for ${to}:`, error.message);
-    throw error;
-  }
-}
-
-// Main send email function with fallback
-async function sendEmail({ to, subject, html, retryCount = 0, maxRetries = 2 }) {
-  // Try Brevo first if configured
-  if (brevoConfigured) {
-    try {
-      return await sendEmailWithBrevo({ to, subject, html });
-    } catch (brevoError) {
-      console.log(`⚠️ Brevo failed, trying Gmail fallback...`);
-      
-      // Try Gmail as fallback
-      try {
-        return await sendEmailWithGmail({ to, subject, html });
-      } catch (gmailError) {
-        console.error(`❌ Both Brevo and Gmail failed for ${to}`);
-        
-        // Retry with Brevo
-        if (retryCount < maxRetries) {
-          const delay = 2000 * (retryCount + 1);
-          console.log(`🔄 Retrying Brevo for ${to} in ${delay/1000}s... (Attempt ${retryCount + 2})`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          return sendEmail({ 
-            to, 
-            subject, 
-            html, 
-            retryCount: retryCount + 1, 
-            maxRetries 
-          });
-        }
-        
-        throw new Error(`Failed to send email to ${to} after multiple attempts`);
-      }
-    }
-  } else {
-    // If Brevo is not configured, use Gmail directly
-    try {
-      if (!transporterVerified) {
-        console.log(`⏳ Waiting for transporter to be verified...`);
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      }
-      return await sendEmailWithGmail({ to, subject, html });
-    } catch (error) {
-      if (retryCount < maxRetries) {
-        const delay = 2000 * (retryCount + 1);
-        console.log(`🔄 Retrying Gmail for ${to} in ${delay/1000}s...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        return sendEmail({ 
-          to, 
-          subject, 
-          html, 
-          retryCount: retryCount + 1, 
-          maxRetries 
-        });
-      }
-      throw error;
-    }
-  }
-}
-
-// Function to send email with retry logic
-async function sendEmailWithRetry(student, subject, html, retryCount = 0) {
-  const maxRetries = 3;
-  const delay = 2000 * (retryCount + 1);
-
-  try {
-    console.log(`📤 Attempting to send email to ${student.email} (attempt ${retryCount + 1})`);
-    
-    const result = await sendEmail({
-      to: student.email,
-      subject: subject,
-      html: html,
-      retryCount: retryCount,
-      maxRetries: 2
-    });
-    
-    console.log(`✅ Email sent to ${student.email} via ${result.method}`);
-    return { success: true, student: student.email, method: result.method };
-  } catch (error) {
-    console.error(`❌ Failed to send email to ${student.email} (attempt ${retryCount + 1})`);
-    console.error("Error message:", error.message);
-    
-    if (retryCount < maxRetries) {
-      console.log(`🔄 Retrying ${student.email} in ${delay/1000}s...`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-      return sendEmailWithRetry(student, subject, html, retryCount + 1);
-    }
-    
-    return { success: false, student: student.email, error: error.message };
-  }
-}
-
 // ================= CORS =================
-app.use(cors({
-  // origin: process.env.FRONTEND_URL || "http://localhost:5173",
-  credentials: true
-}));
+// FIXED: Proper CORS configuration
+app.use(cors());
 
 app.set("io", io);
 
@@ -1721,11 +1582,80 @@ app.post("/admin/drives", async (req, res) => {
   }
 });
 
-// ================= DRIVE NOTIFICATION EMAILS FUNCTION ================================
+// ================= EMAIL SENDING FUNCTION WITH RETRY AND SENDGRID FALLBACK ================================
+
+// Helper function to send email using multiple methods
+async function sendEmail({ to, subject, html }) {
+  // Try Gmail first
+  try {
+    console.log(`📧 Sending email to ${to} via Gmail...`);
+    const info = await transporter.sendMail({
+      from: process.env.EMAIL,
+      to: to,
+      subject: subject,
+      html: html,
+    });
+    console.log(`✅ Email sent via Gmail to ${to}`);
+    return { success: true, method: 'gmail', info };
+  } catch (gmailError) {
+    console.log(`❌ Gmail failed for ${to}:`, gmailError.message);
+    
+    // Try SendGrid as fallback if available
+    if (sgMail && process.env.SENDGRID_API_KEY) {
+      try {
+        console.log(`📧 Sending email to ${to} via SendGrid...`);
+        const msg = {
+          to: to,
+          from: process.env.EMAIL,
+          subject: subject,
+          html: html,
+        };
+        await sgMail.send(msg);
+        console.log(`✅ Email sent via SendGrid to ${to}`);
+        return { success: true, method: 'sendgrid' };
+      } catch (sendgridError) {
+        console.log(`❌ SendGrid also failed for ${to}:`, sendgridError.message);
+        throw sendgridError;
+      }
+    }
+    throw gmailError;
+  }
+}
+
+// Function to send email with retry
+async function sendEmailWithRetry(student, subject, html, retryCount = 0) {
+  const maxRetries = 3;
+  const delay = 2000 * (retryCount + 1);
+
+  try {
+    console.log(`📤 Attempting to send email to ${student.email} (attempt ${retryCount + 1})`);
+    
+    const result = await sendEmail({
+      to: student.email,
+      subject: subject,
+      html: html,
+    });
+    
+    console.log(`✅ Email sent to ${student.email} via ${result.method}`);
+    return { success: true, student: student.email, method: result.method };
+  } catch (error) {
+    console.error(`❌ Failed to send email to ${student.email} (attempt ${retryCount + 1})`);
+    console.error("Error code:", error.code || error.response?.status);
+    console.error("Error message:", error.message);
+    
+    if (retryCount < maxRetries) {
+      console.log(`🔄 Retrying ${student.email} in ${delay/1000}s...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return sendEmailWithRetry(student, subject, html, retryCount + 1);
+    }
+    
+    return { success: false, student: student.email, error: error.message };
+  }
+}
 
 async function sendDriveNotificationEmails(driveData) {
   try {
-    console.log("📧 Starting to send drive notification emails using Brevo...");
+    console.log("📧 Starting to send drive notification emails...");
 
     const students = await Users.find({ role: "student" }, "name email");
     if (!students || students.length === 0) {
@@ -1734,8 +1664,13 @@ async function sendDriveNotificationEmails(driveData) {
     }
 
     console.log(`📧 Found ${students.length} students to send notifications`);
-    console.log(`📧 Brevo configured: ${brevoConfigured}`);
-    console.log(`📧 Sender email: ${process.env.EMAIL || 'noreply@tnpcportal.com'}`);
+    console.log(`📧 Using email: ${process.env.EMAIL}`);
+    console.log(`📧 Email password set: ${!!process.env.EMAIL_PASSWORD}`);
+    if (sgMail && process.env.SENDGRID_API_KEY) {
+      console.log(`📧 SendGrid fallback: ✅ Available`);
+    } else {
+      console.log(`📧 SendGrid fallback: ❌ Not configured`);
+    }
 
     // Format the date for email
     const driveDate = driveData.date
@@ -1811,8 +1746,7 @@ async function sendDriveNotificationEmails(driveData) {
       </div>
     `;
 
-    // Send emails in batches to avoid rate limiting
-    const batchSize = 20;
+    const batchSize = 10;
     let successCount = 0;
     let failCount = 0;
     const results = [];
@@ -1822,40 +1756,35 @@ async function sendDriveNotificationEmails(driveData) {
       
       console.log(`📤 Processing batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(students.length / batchSize)}`);
 
-      // Process batch with Promise.all for parallel sending (limited to batch size)
-      const batchPromises = batch.map((student) => {
+      for (const student of batch) {
         if (!student.email) {
           console.log(`⚠️ Skipping student ${student.name} - no email`);
-          return Promise.resolve({ success: false, student: student.name, error: "No email" });
+          continue;
         }
 
-        return sendEmailWithRetry(student, emailSubject, emailHtml);
-      });
+        if (results.length > 0) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
 
-      const batchResults = await Promise.all(batchPromises);
-      
-      batchResults.forEach(result => {
+        const result = await sendEmailWithRetry(student, emailSubject, emailHtml);
         results.push(result);
         if (result.success) {
           successCount++;
         } else {
           failCount++;
         }
-      });
+      }
 
-      console.log(`✅ Batch ${Math.floor(i / batchSize) + 1} completed: ${batchResults.filter(r => r.success).length} sent, ${batchResults.filter(r => !r.success).length} failed`);
-
-      // Delay between batches to avoid rate limiting
       if (i + batchSize < students.length) {
-        console.log(`⏳ Waiting 2 seconds before next batch...`);
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        console.log(`⏳ Waiting 3 seconds before next batch...`);
+        await new Promise((resolve) => setTimeout(resolve, 3000));
       }
     }
 
     console.log(`✅ Email notifications completed`);
     console.log(`📊 Summary: ${successCount} sent, ${failCount} failed, ${students.length} total students`);
 
-    const failedEmails = results.filter(r => !r.success && r.error !== "No email");
+    const failedEmails = results.filter(r => !r.success);
     if (failedEmails.length > 0) {
       console.warn(`⚠️ Failed emails:`, failedEmails.map(r => r.student));
     }
@@ -1865,7 +1794,7 @@ async function sendDriveNotificationEmails(driveData) {
   }
 }
 
-// Test email endpoint
+// Optional: Endpoint to test email sending
 app.post("/admin/test-email", async (req, res) => {
   try {
     const { email } = req.body;
@@ -1878,8 +1807,9 @@ app.post("/admin/test-email", async (req, res) => {
     }
 
     console.log(`📧 Testing email to: ${email}`);
-    console.log(`📧 Brevo configured: ${brevoConfigured}`);
-    console.log(`📧 Sender email: ${process.env.EMAIL || 'noreply@tnpcportal.com'}`);
+    console.log(`📧 Using EMAIL: ${process.env.EMAIL}`);
+    console.log(`📧 EMAIL_PASSWORD set: ${!!process.env.EMAIL_PASSWORD}`);
+    console.log(`📧 SendGrid available: ${!!sgMail && !!process.env.SENDGRID_API_KEY}`);
 
     const result = await sendEmail({
       to: email,
@@ -1889,11 +1819,8 @@ app.post("/admin/test-email", async (req, res) => {
         <p>This is a test email from the TNPC Portal.</p>
         <p>If you're receiving this, the email configuration is working correctly!</p>
         <p>Timestamp: ${new Date().toISOString()}</p>
-        <p>Method: Brevo API</p>
-        <p>Sender: ${process.env.EMAIL || 'noreply@tnpcportal.com'}</p>
+        <p>Method: ${result.method || 'unknown'}</p>
       `,
-      retryCount: 0,
-      maxRetries: 1
     });
 
     console.log(`✅ Test email sent successfully to ${email} via ${result.method}`);
@@ -1902,8 +1829,7 @@ app.post("/admin/test-email", async (req, res) => {
       success: true,
       message: `Test email sent to ${email}`,
       method: result.method,
-      messageId: result.messageId,
-      brevoConfigured: brevoConfigured
+      info: result.info
     });
   } catch (error) {
     console.error("❌ Test email error:", error);
@@ -1912,7 +1838,7 @@ app.post("/admin/test-email", async (req, res) => {
       success: false,
       message: "Failed to send test email",
       error: error.message,
-      brevoConfigured: brevoConfigured
+      code: error.code || error.response?.status
     });
   }
 });
@@ -2694,8 +2620,8 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
   console.log(`🔌 Socket.IO is ready`);
-  console.log(`📧 Email provider: ${brevoConfigured ? 'Brevo ✅' : 'Gmail (fallback) ⚠️'}`);
-  console.log(`📧 Sender email: ${process.env.EMAIL || 'noreply@tnpcportal.com'}`);
+  console.log(`📧 Email configuration: ${process.env.EMAIL ? '✅ Set' : '❌ Missing'}`);
+  console.log(`🔑 Email password: ${process.env.EMAIL_PASSWORD ? '✅ Set' : '❌ Missing'}`);
   console.log(`📦 MongoDB: ${process.env.MONGOURL ? '✅ Set' : '❌ Missing'}`);
-  console.log(`📧 Brevo API Key: ${process.env.BREVO_API_KEY ? '✅ Set' : '❌ Missing'}`);
+  console.log(`📧 SendGrid: ${process.env.SENDGRID_API_KEY ? '✅ Configured' : '❌ Not configured'}`);
 });
