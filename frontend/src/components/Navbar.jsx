@@ -18,7 +18,7 @@ const Navbar = ({ user, setUser }) => {
         { to: "/", label: "Home" },
         { to: "/about", label: "About" },
         { to: "/placements", label: "Placements" },
-        { to: "/departments", label: "Departments" },
+        // { to: "/departments", label: "Departments" },
         { to: "/drives", label: "Drives" },
     ];
 

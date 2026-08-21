@@ -21,7 +21,7 @@ const Footer = () => {
     { icon: <Home size={18} />, name: "Home", href: "/" },
     { icon: <User2 size={18} />, name: "About", href: "/about" },
     { icon: <Award size={18} />, name: "Placements", href: "/placements" },
-    { icon: <Building2 size={18} />, name: "Departments", href: "/departments" },
+    // { icon: <Building2 size={18} />, name: "Departments", href: "/departments" },
     { icon: <Building size={18} />, name: "Drives", href: "/drives" },
     { icon: <LogIn size={18} />, name: "Login", href: "/login" },
   ];

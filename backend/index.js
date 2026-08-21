@@ -893,7 +893,7 @@ app.get("/departments", async (req, res) => {
 
 app.get("/placements", async (req, res) => {
   try {
-    const yearlyPlacementsData = await YearlyPlacements.find({});
+    const yearlyPlacementsData = await YearlyPlacements.find({}).sort({ year: -1 });
     const companiesData = await Company.find({});
     const placedStudentsData = await PlacedStudents.find({});
     const departmentsData = await DepartmentSchema.find({});
@@ -1006,6 +1006,151 @@ app.post("/applyDrive/:studentId", async (req, res) => {
     });
   }
 });
+
+// ============== YEARLY PLACEMENTS CRUD ROUTES ==============
+
+// GET all yearly placements
+app.get("/admin/yearly-placements", authenticateToken, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const placements = await YearlyPlacements.find({}).sort({ year: -1 });
+    res.json(placements);
+  } catch (error) {
+    console.error("Error fetching yearly placements:", error);
+    res.status(500).json({ message: "Server Error" });
+  }
+});
+
+// POST - Add new yearly placement
+app.post("/admin/yearly-placements", authenticateToken, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const { year, totalPlaced, totalCompanies, highestPackage, averagePackage, totalStudents } = req.body;
+
+    // Check if year already exists
+    const existing = await YearlyPlacements.findOne({ year });
+    if (existing) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Year ${year} already exists` 
+      });
+    }
+
+    const newPlacement = await YearlyPlacements.create({
+      year,
+      totalPlaced,
+      totalCompanies: totalCompanies || 0,
+      highestPackage: highestPackage || 0,
+      averagePackage: averagePackage || 0,
+      totalStudents: totalStudents || 0
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Yearly placement added successfully",
+      data: newPlacement
+    });
+  } catch (error) {
+    console.error("Error adding yearly placement:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Server Error: " + error.message 
+    });
+  }
+});
+
+// PUT - Update yearly placement
+app.put("/admin/yearly-placements/:id", authenticateToken, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { year, totalPlaced, totalCompanies, highestPackage, averagePackage, totalStudents } = req.body;
+
+    if (!Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid ID format" 
+      });
+    }
+
+    // Check if year already exists for another record
+    const existing = await YearlyPlacements.findOne({ 
+      year, 
+      _id: { $ne: id } 
+    });
+    if (existing) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Year ${year} already exists for another record` 
+      });
+    }
+
+    const updated = await YearlyPlacements.findByIdAndUpdate(
+      id,
+      {
+        year,
+        totalPlaced,
+        totalCompanies: totalCompanies || 0,
+        highestPackage: highestPackage || 0,
+        averagePackage: averagePackage || 0,
+        totalStudents: totalStudents || 0,
+        updatedAt: new Date()
+      },
+      { new: true, runValidators: true }
+    );
+
+    if (!updated) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Yearly placement not found" 
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Yearly placement updated successfully",
+      data: updated
+    });
+  } catch (error) {
+    console.error("Error updating yearly placement:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Server Error: " + error.message 
+    });
+  }
+});
+
+// DELETE - Delete yearly placement
+app.delete("/admin/yearly-placements/:id", authenticateToken, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid ID format" 
+      });
+    }
+
+    const deleted = await YearlyPlacements.findByIdAndDelete(id);
+
+    if (!deleted) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Yearly placement not found" 
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Yearly placement deleted successfully"
+    });
+  } catch (error) {
+    console.error("Error deleting yearly placement:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Server Error: " + error.message 
+    });
+  }
+});
+
 
 // Debug endpoint
 app.get("/debug/student-applications/:studentId", async (req, res) => {

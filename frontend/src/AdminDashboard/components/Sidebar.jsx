@@ -40,7 +40,8 @@ const Sidebar = ({
         { id: 'drives', name: 'Company Drives', icon: 'Briefcase', color: 'from-purple-500 to-purple-600' },
         { id: 'placements', name: 'Placements', icon: 'Award', color: 'from-yellow-500 to-yellow-600' },
         { id: 'activities', name: 'Activities', icon: "Activity", color: 'from-pink-500 to-pink-600' },
-        { id: 'department-stats', name: 'Department Stats', icon: 'GraduationCap', color: 'from-indigo-500 to-indigo-600' }
+        { id: 'department-stats', name: 'Department Stats', icon: 'GraduationCap', color: 'from-indigo-500 to-indigo-600' },
+        { id: 'yearly-placements', name: 'Yearly Placements', icon: 'BarChart3', color: 'from-teal-500 to-teal-600' }
     ];
 
     // Sidebar container variants

@@ -21,6 +21,8 @@ import ActivitiesTab from './tabs/ActivitiesTab';
 import DepartmentStatsTab from './tabs/DepartmentStatsTab';
 import AdminDashboardSkeleton from './components/AdminDashboardSkeleton';
 import { io } from "socket.io-client";
+import AdminYearlyPlacements from './tabs/AdminYearlyPlacements';
+
 const AdminDashboard = ({ user, setUser }) => {
     const navigate = useNavigate();
     const { showAlert, AlertComponent } = useAlert();
@@ -79,6 +81,7 @@ const AdminDashboard = ({ user, setUser }) => {
             }
         };
     }, []);
+
     // Responsive handling
     useEffect(() => {
         const handleResize = () => {
@@ -98,7 +101,7 @@ const AdminDashboard = ({ user, setUser }) => {
         showAlert("Welcome to the Admin Dashboard!", "success", 4000);
     }, []);
 
-    // Tab change alert
+    // Tab change alert - Add yearlyPlacements to the switch
     useEffect(() => {
         const tabConfig = tabMessages[activeTab];
         if (tabConfig) {
@@ -484,7 +487,13 @@ const AdminDashboard = ({ user, setUser }) => {
                         <DepartmentStatsTab
                             activities={recentActivities}
                             stats={stats}
-                            isMobile={isMobile} />
+                            isMobile={isMobile} 
+                        />
+                    )}
+
+                    {/* ADD THE YEARLY PLACEMENTS TAB */}
+                    {activeTab === 'yearly-placements' && (
+                        <AdminYearlyPlacements />
                     )}
                 </div>
             </main>

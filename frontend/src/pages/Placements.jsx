@@ -225,7 +225,7 @@ const Placements = () => {
                       dataKey="totalPlaced"
                       fill="#1a365d"
                       radius={[4, 4, 0, 0]}
-                      barSize={40}
+                      barSize={50}
                     />
                   </BarChart>
                 </ResponsiveContainer>
@@ -235,7 +235,7 @@ const Placements = () => {
         </div>
 
         {/* Companies Section */}
-        <div className='bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-8'>
+        {/* <div className='bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-8'>
           <div className='flex items-center justify-between mb-6'>
             <div>
               <h2 className='text-lg font-semibold text-gray-900'>
@@ -279,7 +279,7 @@ const Placements = () => {
               ))}
             </div>
           )}
-        </div>
+        </div> */}
 
         {/* Students Table */}
         <div className='bg-white rounded-xl shadow-sm border border-gray-100 p-6'>
